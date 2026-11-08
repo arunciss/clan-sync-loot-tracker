@@ -20,8 +20,8 @@ import net.runelite.client.ui.FontManager;
 
 /**
  * "Clan tasks" part of the side panel: a card with the current task (title, boss, difficulty, points, progress)
- * and the Done / Skip-Re-roll buttons, or a Take a new task button when there is no task. (A free green-log skip,
- * if the clan offers one, is not done from the plugin.)
+ * and the Done / Skip-Re-roll buttons, or a Take a new task button when there is no task. (The free green-log skip
+ * stays a Discord-only command.)
  * Shown only when the website supports clan tasks and the option is on. Must be used on the Swing thread.
  */
 class ClanTasksSection extends JPanel
@@ -30,7 +30,7 @@ class ClanTasksSection extends JPanel
 	{
 		void done(ClanTask task);
 
-		/** Skip the task for one re-roll (the normal skip). */
+		/** Skip the task for one re-roll (the normal Discord skip). */
 		void reroll(ClanTask task, ClanTaskState state);
 
 		void take();
@@ -251,7 +251,7 @@ class ClanTasksSection extends JPanel
 		rerollsLabel.getParent().setVisible(joined);
 		rerollButton.setText(rerollButtonText(rerolls));
 		rerollButton.setToolTipText(rerolls > 0
-			? "I do not want this task: skip it for one re-roll and get a new task"
+			? "I do not want this task: skip it for one re-roll and get a new task (same as the Discord skip)"
 			: "No re-rolls left" + (state != null && state.getNextRerollIn() > 0
 			? ": you get the next one after " + state.getNextRerollIn() + " more completed task" + (state.getNextRerollIn() == 1 ? "" : "s") : ""));
 		doneButton.setVisible(task != null);

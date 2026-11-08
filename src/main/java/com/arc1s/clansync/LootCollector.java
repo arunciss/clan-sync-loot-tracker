@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.Executor;
 import java.util.function.Predicate;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.ChatMessageType;
@@ -48,6 +49,8 @@ public class LootCollector
 	private final ContainerLedger containers;
 	private final Runnable onRecorded;
 	private final Predicate<String> paused;
+	/** RuneLite's scheduled executor. Disk writes must not run on the client thread. */
+	private final Executor io;
 	private ContainerOpening opening;
 	private KillCount lastKillCount;
 	private volatile TaskListener taskListener;
@@ -65,7 +68,7 @@ public class LootCollector
 		taskListener = listener;
 	}
 
-	public LootCollector(Client client, ItemManager itemManager, ClanSyncConfig config, LootQueue queue, ContainerLedger containers, Runnable onRecorded, Predicate<String> paused)
+	public LootCollector(Client client, ItemManager itemManager, ClanSyncConfig config, LootQueue queue, ContainerLedger containers, Runnable onRecorded, Predicate<String> paused, Executor io)
 	{
 		this.paused = paused;
 		this.containers = containers;
@@ -74,6 +77,7 @@ public class LootCollector
 		this.config = config;
 		this.queue = queue;
 		this.onRecorded = onRecorded;
+		this.io = io;
 	}
 
 	@Subscribe
@@ -211,8 +215,19 @@ public class LootCollector
 			run.setUid(UUID.randomUUID().toString());
 			run.setPlayer(Text.sanitize(client.getLocalPlayer().getName()));
 			run.setRecordedAt(Instant.now().toString());
-			queue.add(run);
-			onRecorded.run();
+			// Raid varbits were already read above. The queue file is written off the client thread.
+			io.execute(() ->
+			{
+				try
+				{
+					queue.add(run);
+					onRecorded.run();
+				}
+				catch (RuntimeException e)
+				{
+					log.warn("Saving a raid run failed", e);
+				}
+			});
 		}
 		catch (RuntimeException e)
 		{
@@ -254,8 +269,18 @@ public class LootCollector
 		time.setUid(UUID.randomUUID().toString());
 		time.setPlayer(Text.sanitize(client.getLocalPlayer().getName()));
 		time.setRecordedAt(Instant.now().toString());
-		queue.add(time);
-		onRecorded.run();
+		io.execute(() ->
+		{
+			try
+			{
+				queue.add(time);
+				onRecorded.run();
+			}
+			catch (RuntimeException e)
+			{
+				log.warn("Saving a kill time failed", e);
+			}
+		});
 	}
 
 	// A raid's kill time gets the team size and raid level the raid tracker read from the party varbits.
@@ -319,9 +344,44 @@ public class LootCollector
 		record.setUid(UUID.randomUUID().toString());
 		record.setPlayer(Text.sanitize(client.getLocalPlayer().getName()));
 		record.setRecordedAt(Instant.now().toString());
-		linkContainers(record);
-		queue.add(record, names, tradeable);
-		onRecorded.run();
+		// Item definitions have to be read here, on the client thread. The ledger and queue files do not.
+		Integer parentId = null;
+		List<int[]> received = new ArrayList<>();
+		if (record.getType() != LootSourceType.PLAYER)
+		{
+			if (record.getContainerItemId() != null)
+			{
+				parentId = itemManager.canonicalize(record.getContainerItemId());
+			}
+			for (LootItem item : record.getItems())
+			{
+				if (isContainer(item.getId()))
+				{
+					received.add(new int[]{item.getId(), item.getQuantity()});
+				}
+			}
+		}
+		Integer parent = parentId;
+		io.execute(() ->
+		{
+			try
+			{
+				if (parent != null)
+				{
+					record.setParentUid(containers.opened(parent, record.getAmount()));
+				}
+				for (int[] pair : received)
+				{
+					containers.received(record.getUid(), pair[0], pair[1]);
+				}
+				queue.add(record, names, tradeable);
+				onRecorded.run();
+			}
+			catch (RuntimeException e)
+			{
+				log.warn("Saving loot failed", e);
+			}
+		});
 		notifyLoot(record, names);
 	}
 
@@ -366,25 +426,6 @@ public class LootCollector
 		catch (RuntimeException e)
 		{
 			log.warn("Task progress update failed", e);
-		}
-	}
-
-	private void linkContainers(LootRecord record)
-	{
-		if (record.getType() == LootSourceType.PLAYER)
-		{
-			return;
-		}
-		if (record.getContainerItemId() != null)
-		{
-			record.setParentUid(containers.opened(itemManager.canonicalize(record.getContainerItemId()), record.getAmount()));
-		}
-		for (LootItem item : record.getItems())
-		{
-			if (isContainer(item.getId()))
-			{
-				containers.received(record.getUid(), item.getId(), item.getQuantity());
-			}
 		}
 	}
 

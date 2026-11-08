@@ -20,6 +20,7 @@ import java.util.TreeSet;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import javax.inject.Inject;
 import javax.swing.JOptionPane;
@@ -114,6 +115,8 @@ public class ClanSyncPlugin extends Plugin
 	private OverlayManager overlayManager;
 
 	private final AtomicBoolean running = new AtomicBoolean();
+	/** Stops a slow upload from queueing another send on every 10th tick. There is only one client executor thread. */
+	private final AtomicBoolean lootSendQueued = new AtomicBoolean();
 	private SnapshotStore store;
 	private SiteUploader uploader;
 	private ClanSyncPanel panel;
@@ -160,7 +163,8 @@ public class ClanSyncPlugin extends Plugin
 	{
 		TextStore files = new PluginDirectoryStore(getPluginDirectory());
 		store = new SnapshotStore(files, gson);
-		uploader = new SiteUploader(okHttpClient, gson);
+		OkHttpClient http = withTimeouts(okHttpClient);
+		uploader = new SiteUploader(http, gson);
 		running.set(false);
 		nextAutoAttempt = 0;
 		rosterShown = false;
@@ -168,7 +172,7 @@ public class ClanSyncPlugin extends Plugin
 		lootQueue = new LootQueue(files, gson);
 		lootSender = new LootSender(lootQueue, uploader, config);
 		lootCollector = new LootCollector(client, itemManager, config, lootQueue, new ContainerLedger(files, gson), this::showLootQueue,
-			player -> lootSender.isRejected(player));
+			player -> lootSender.isRejected(player), executor);
 		lootCollector.setTaskListener(new LootCollector.TaskListener()
 		{
 			@Override
@@ -191,7 +195,7 @@ public class ClanSyncPlugin extends Plugin
 		});
 		eventBus.register(lootCollector);
 
-		tasksClient = new ClanTasksClient(okHttpClient, gson);
+		tasksClient = new ClanTasksClient(http, gson);
 		taskOverlay = new TaskCompleteOverlay();
 		overlayManager.add(taskOverlay);
 		taskProgressOverlay = new ClanTaskOverlay(this, () -> config.taskOverlay() && tasksSeen && tasksOn()
@@ -390,22 +394,56 @@ public class ClanSyncPlugin extends Plugin
 		{
 			return;
 		}
-		executor.execute(() ->
+		if (!lootSendQueued.compareAndSet(false, true))
 		{
-			lootSender.sendAll();
-			if (lootSender.isFailing())
+			return;
+		}
+		try
+		{
+			executor.execute(() ->
 			{
-				lootPausedUntil = tickCounter + LOOT_SEND_TICKS;
-			}
-			else if (taskProgress.takeUploadPending())
-			{
-				checkTasksSoon();
-			}
-			if (ui != null)
-			{
-				ui.setLoot(lootSender.describe());
-			}
-		});
+				try
+				{
+					lootSender.sendAll();
+					if (lootSender.isFailing())
+					{
+						lootPausedUntil = tickCounter + LOOT_SEND_TICKS;
+					}
+					else if (taskProgress.takeUploadPending())
+					{
+						checkTasksSoon();
+					}
+					if (ui != null)
+					{
+						ui.setLoot(lootSender.describe());
+					}
+				}
+				finally
+				{
+					lootSendQueued.set(false);
+				}
+			});
+		}
+		catch (RuntimeException e)
+		{
+			lootSendQueued.set(false);
+			throw e;
+		}
+	}
+
+	/**
+	 * The shared client has a 10 second read timeout and no overall call timeout (OkHttp 3.14 defaults).
+	 * {@code newBuilder()} keeps RuneLite's interceptors and dispatcher. A call that trickles bytes would
+	 * otherwise pin the client's only scheduled thread until restart.
+	 */
+	private static OkHttpClient withTimeouts(OkHttpClient base)
+	{
+		return base.newBuilder()
+			.connectTimeout(10, TimeUnit.SECONDS)
+			.readTimeout(20, TimeUnit.SECONDS)
+			.writeTimeout(20, TimeUnit.SECONDS)
+			.callTimeout(30, TimeUnit.SECONDS)
+			.build();
 	}
 
 	private void showLootQueue()
@@ -810,7 +848,7 @@ public class ClanSyncPlugin extends Plugin
 		if (!result.supported && action != null)
 		{
 			// An older website without this button: keep the section and say so.
-			ui.setTasksMessage("The website does not support this button yet. Use your clan's other task tools instead.", true);
+			ui.setTasksMessage("The website does not support this button yet. Use the Discord command instead.", true);
 			return;
 		}
 		if (!result.supported)
@@ -867,7 +905,7 @@ public class ClanSyncPlugin extends Plugin
 			}
 			if (!result.ok() && result.state == null)
 			{
-				// The task changed elsewhere (another tool or device): show the current one.
+				// The task changed elsewhere (Discord, another device): show the current one.
 				nextTaskPoll = 0;
 			}
 		}
@@ -899,7 +937,7 @@ public class ClanSyncPlugin extends Plugin
 	}
 
 	/**
-	 * The website keeps the task preferences (other clan tools may use the same ones), so its values win: the settings show them.
+	 * The website keeps the task preferences (Discord uses the same ones), so its values win: the settings show them.
 	 * A change the user made while they could not be sent yet is sent now instead.
 	 */
 	private void applyServerPrefs(ClanTaskState state)
@@ -970,7 +1008,7 @@ public class ClanSyncPlugin extends Plugin
 				}
 				else if (!result.supported)
 				{
-					ui.setTasksMessage("This website cannot save task preferences yet.", true);
+					ui.setTasksMessage("This website cannot save task preferences yet (wilderness: use /pvm_wildy on Discord).", true);
 				}
 				else
 				{
@@ -1033,7 +1071,7 @@ public class ClanSyncPlugin extends Plugin
 	static String rerollConfirmText(ClanTask task, int rerolls)
 	{
 		return "Skip this task and get a new one?\n\n" + task.displayTitle() + "\n\n"
-			+ "This uses 1 re-roll.\n"
+			+ "This uses 1 re-roll, the same as the Discord skip.\n"
 			+ "Re-rolls left: " + rerolls + " now, " + (rerolls - 1) + " after this. This cannot be undone.";
 	}
 

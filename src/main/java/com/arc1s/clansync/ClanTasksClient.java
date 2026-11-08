@@ -23,7 +23,7 @@ import okhttp3.ResponseBody;
 class ClanTasksClient
 {
 	static final String ACTION_DONE = "done";
-	/** Skip the task for one re-roll, like a normal skip. */
+	/** Skip the task for one re-roll, exactly like the Discord skip. */
 	static final String ACTION_REROLL = "reroll";
 	static final String ACTION_TAKE = "take";
 	/** Saves the task preferences (wilderness, slayer boss tasks); they apply from the next task. */

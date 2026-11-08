@@ -144,8 +144,8 @@ public interface ClanSyncConfig extends Config
 	@ConfigItem(
 		keyName = "wildernessTasks",
 		name = "Wilderness tasks",
-		description = "Allow clan tasks in the Wilderness. Saved on the clan website and used from your next task;"
-			+ " your current task is not changed.",
+		description = "Allow clan tasks in the Wilderness. Saved on the clan website (the same setting as the Discord"
+			+ " /pvm_wildy command) and used from your next task; your current task is not changed.",
 		section = tasksSection,
 		position = 24
 	)

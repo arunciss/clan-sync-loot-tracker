@@ -20,7 +20,10 @@ public class LootQueue
 
 	private final TextStore store;
 	private final Gson gson;
+	private final Object writeLock = new Object();
 	private LootBatch pending;
+	/** Bumped under the monitor on every mutation so a slower older write cannot replace a newer file. */
+	private int saveGeneration;
 
 	public LootQueue(TextStore store, Gson gson)
 	{
@@ -29,36 +32,48 @@ public class LootQueue
 		this.pending = load();
 	}
 
-	public synchronized void add(LootRecord record, Map<Integer, String> names, Map<Integer, Boolean> tradeable)
+	public void add(LootRecord record, Map<Integer, String> names, Map<Integer, Boolean> tradeable)
 	{
-		pending.getRecords().add(record);
-		while (pending.getRecords().size() > MAX_RECORDS)
+		LootBatch copy;
+		int generation;
+		synchronized (this)
 		{
-			pending.getRecords().remove(0);
+			pending.getRecords().add(record);
+			trim(pending.getRecords());
+			pending.getItemNames().putAll(names);
+			pending.getItemTradeable().putAll(tradeable);
+			generation = ++saveGeneration;
+			copy = snapshot(pending);
 		}
-		pending.getItemNames().putAll(names);
-		pending.getItemTradeable().putAll(tradeable);
-		save();
+		write(generation, copy);
 	}
 
-	public synchronized void add(KillTime killTime)
+	public void add(KillTime killTime)
 	{
-		pending.getKillTimes().add(killTime);
-		while (pending.getKillTimes().size() > MAX_RECORDS)
+		LootBatch copy;
+		int generation;
+		synchronized (this)
 		{
-			pending.getKillTimes().remove(0);
+			pending.getKillTimes().add(killTime);
+			trim(pending.getKillTimes());
+			generation = ++saveGeneration;
+			copy = snapshot(pending);
 		}
-		save();
+		write(generation, copy);
 	}
 
-	public synchronized void add(RaidRun run)
+	public void add(RaidRun run)
 	{
-		pending.getRaidRuns().add(run);
-		while (pending.getRaidRuns().size() > MAX_RECORDS)
+		LootBatch copy;
+		int generation;
+		synchronized (this)
 		{
-			pending.getRaidRuns().remove(0);
+			pending.getRaidRuns().add(run);
+			trim(pending.getRaidRuns());
+			generation = ++saveGeneration;
+			copy = snapshot(pending);
 		}
-		save();
+		write(generation, copy);
 	}
 
 	public synchronized int size()
@@ -140,17 +155,46 @@ public class LootQueue
 		return out;
 	}
 
-	public synchronized void remove(Set<String> uids)
+	public void remove(Set<String> uids)
 	{
-		pending.getRecords().removeIf(record -> uids.contains(record.getUid()));
-		pending.getKillTimes().removeIf(killTime -> uids.contains(killTime.getUid()));
-		pending.getRaidRuns().removeIf(run -> uids.contains(run.getUid()));
-		if (pending.getRecords().isEmpty())
+		LootBatch copy;
+		int generation;
+		synchronized (this)
 		{
-			pending.getItemNames().clear();
-			pending.getItemTradeable().clear();
+			pending.getRecords().removeIf(record -> uids.contains(record.getUid()));
+			pending.getKillTimes().removeIf(killTime -> uids.contains(killTime.getUid()));
+			pending.getRaidRuns().removeIf(run -> uids.contains(run.getUid()));
+			if (pending.getRecords().isEmpty())
+			{
+				pending.getItemNames().clear();
+				pending.getItemTradeable().clear();
+			}
+			generation = ++saveGeneration;
+			copy = snapshot(pending);
 		}
-		save();
+		write(generation, copy);
+	}
+
+	/** Drop the oldest entries in one pass. Removing index 0 in a loop copies the whole list each time. */
+	private static void trim(List<?> items)
+	{
+		int extra = items.size() - MAX_RECORDS;
+		if (extra > 0)
+		{
+			items.subList(0, extra).clear();
+		}
+	}
+
+	private static LootBatch snapshot(LootBatch src)
+	{
+		LootBatch copy = new LootBatch();
+		copy.setSchemaVersion(src.getSchemaVersion());
+		copy.setRecords(new ArrayList<>(src.getRecords()));
+		copy.setKillTimes(new ArrayList<>(src.getKillTimes()));
+		copy.setRaidRuns(new ArrayList<>(src.getRaidRuns()));
+		copy.setItemNames(new TreeMap<>(src.getItemNames()));
+		copy.setItemTradeable(new TreeMap<>(src.getItemTradeable()));
+		return copy;
 	}
 
 	private LootBatch load()
@@ -186,15 +230,29 @@ public class LootQueue
 		return new LootBatch();
 	}
 
-	private void save()
+	/**
+	 * JSON and the file write stay off the monitor. The game thread calls {@link #size()} every tick;
+	 * holding the monitor across a multi-megabyte rewrite stalls the whole client until the write returns.
+	 */
+	private void write(int generation, LootBatch copy)
 	{
-		try
+		synchronized (writeLock)
 		{
-			store.write(FILE, gson.toJson(pending));
-		}
-		catch (IOException e)
-		{
-			log.warn("Could not save the loot queue", e);
+			synchronized (this)
+			{
+				if (generation != saveGeneration)
+				{
+					return;
+				}
+			}
+			try
+			{
+				store.write(FILE, gson.toJson(copy));
+			}
+			catch (IOException e)
+			{
+				log.warn("Could not save the loot queue", e);
+			}
 		}
 	}
 }

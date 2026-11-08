@@ -46,12 +46,12 @@ public class ClanSyncLogicTest
 			member("Jonas", 10, "Recruit"), member("Petras", 50, "Sergeant"), member("Old Guy", 10, "Recruit"));
 		// Same player, different spacing/case: must not count as left + joined.
 		ClanSnapshot after = snapshot("t2",
-			member("jonas", 10, "Recruit"), member("Petras", 100, "Captain"), member("New\u00A0Guy", 10, "Recruit"));
+			member("jonas", 10, "Recruit"), member("Petras", 100, "Captain"), member("New Guy", 10, "Recruit"));
 
 		ClanSnapshot.Changes changes = SnapshotDiff.compute(before, after);
 
 		assertEquals("t1", changes.getPreviousCollectedAt());
-		assertEquals(Arrays.asList("New\u00A0Guy"), changes.getJoined());
+		assertEquals(Arrays.asList("New Guy"), changes.getJoined());
 		assertEquals(Arrays.asList("Old Guy"), changes.getLeft());
 		assertEquals(1, changes.getRankChanges().size());
 		ClanSnapshot.RankChange change = changes.getRankChanges().get(0);
