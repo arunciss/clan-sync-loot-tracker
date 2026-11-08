@@ -1,7 +1,7 @@
 # Clan Sync & Loot Tracker
 
 A RuneLite plugin that sends **your own** PvM results to a clan website **you choose**:
-drops, kill counts, kill times, personal bests and raid times. The clan Owner and Deputy Owners can also
+drops, kill counts, kill times, personal bests, raid times and big level-ups (92, 99 and XP milestones). The clan Owner and Deputy Owners can also
 sync the clan roster. Created by Arc1s, originally built for the PvM L1etuva clan; it works with any website
 that implements the same API. Nothing in the plugin points at a particular website: everything is set in the
 plugin settings.
@@ -38,7 +38,21 @@ character than the one you are logged in with, the plugin stops recording and se
   whether the time was shown with precise timing;
 - raid runs (Chambers of Xeric, Theatre of Blood, Tombs of Amascut, Fractured Archive): room / wave times,
   total and challenge times, points, team size, and the names of your raid party members as shown in the
-  game's party list. Players merely seen on screen are never sent.
+  game's party list. In Chambers of Xeric, when the raid party list cannot be read, the names of the players
+  inside your raid instance (where only your party can be) are sent instead, marked as such. Players merely seen
+  on screen anywhere else are never sent;
+- level-ups of your own skills to level 92 and 99, and XP milestones every 5m XP from 15m to 200m: the skill,
+  the level, your XP in that skill and the milestone reached. Only changes seen while you play are sent (the
+  values at login are never reported), and nothing about other players' stats.
+
+`POST <url>/loot` is one JSON object. Besides the drops, kill times and raid runs above, it may include:
+
+```json
+"skillEvents": [{"uid": "...", "player": "Name", "recordedAt": "...", "skill": "Slayer", "type": "LEVEL",
+                 "level": 99, "xp": 13034500, "milestoneXp": null}]
+```
+
+`type` is `LEVEL` (level 92 or 99) or `XP_MILESTONE` (`milestoneXp` is 15000000, 20000000, ... 200000000). A raid run's `teamSource` is `party` (the raid's own party list, including the Chambers of Xeric side panel) or `scene` (Chambers of Xeric players inside the raid instance, only when that party list could not be read). A website that stores skill events answers `data.skillEvents = true`. Until it does, the plugin keeps them queued and does not send a batch that contains only skill events, so an older website is left unchanged.
 
 **Upload clan roster** (`<url>/clan-sync`), clan Owner and Deputy Owners only:
 - clan name, every member's name, rank, rank title and join date, and what changed since the last upload;

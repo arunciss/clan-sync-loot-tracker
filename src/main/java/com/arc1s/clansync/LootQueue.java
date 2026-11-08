@@ -17,6 +17,8 @@ public class LootQueue
 {
 	static final String FILE = "loot-queue.json";
 	static final int MAX_RECORDS = 20000;
+	static final int MAX_SKILL_EVENTS = 500;
+	static final int SKILL_BATCH_SIZE = 50;
 
 	private final TextStore store;
 	private final Gson gson;
@@ -39,7 +41,7 @@ public class LootQueue
 		synchronized (this)
 		{
 			pending.getRecords().add(record);
-			trim(pending.getRecords());
+			trim(pending.getRecords(), MAX_RECORDS);
 			pending.getItemNames().putAll(names);
 			pending.getItemTradeable().putAll(tradeable);
 			generation = ++saveGeneration;
@@ -55,7 +57,7 @@ public class LootQueue
 		synchronized (this)
 		{
 			pending.getKillTimes().add(killTime);
-			trim(pending.getKillTimes());
+			trim(pending.getKillTimes(), MAX_RECORDS);
 			generation = ++saveGeneration;
 			copy = snapshot(pending);
 		}
@@ -69,7 +71,21 @@ public class LootQueue
 		synchronized (this)
 		{
 			pending.getRaidRuns().add(run);
-			trim(pending.getRaidRuns());
+			trim(pending.getRaidRuns(), MAX_RECORDS);
+			generation = ++saveGeneration;
+			copy = snapshot(pending);
+		}
+		write(generation, copy);
+	}
+
+	public void add(SkillEvent event)
+	{
+		LootBatch copy;
+		int generation;
+		synchronized (this)
+		{
+			pending.getSkillEvents().add(event);
+			trim(pending.getSkillEvents(), MAX_SKILL_EVENTS);
 			generation = ++saveGeneration;
 			copy = snapshot(pending);
 		}
@@ -78,23 +94,29 @@ public class LootQueue
 
 	public synchronized int size()
 	{
-		return pending.getRecords().size() + pending.getKillTimes().size() + pending.getRaidRuns().size();
+		return pending.getRecords().size() + pending.getKillTimes().size() + pending.getRaidRuns().size() + pending.getSkillEvents().size();
 	}
 
 	public synchronized LootBatch next(int maxRecords)
 	{
-		return next(maxRecords, Collections.emptySet());
+		return next(maxRecords, Collections.emptySet(), true);
+	}
+
+	public synchronized LootBatch next(int maxRecords, Set<String> skip)
+	{
+		return next(maxRecords, skip, true);
 	}
 
 	/**
 	 * Up to maxRecords of each kind, all about one character (the website checks that the personal code belongs to
 	 * the character the data is about). Characters whose normalised name is in skip are left in the queue.
-	 * The batch is empty when nothing else is waiting.
+	 * The batch is empty when nothing else is waiting. Skill events go along with the same character's other data;
+	 * a batch of only skill events is made only when skillsAlone is true (the site is known to accept them).
 	 */
-	public synchronized LootBatch next(int maxRecords, Set<String> skip)
+	public synchronized LootBatch next(int maxRecords, Set<String> skip, boolean skillsAlone)
 	{
 		LootBatch batch = new LootBatch();
-		String player = firstPlayer(skip);
+		String player = firstPlayer(skip, skillsAlone);
 		if (player == null)
 		{
 			return batch;
@@ -102,6 +124,7 @@ public class LootQueue
 		batch.setRecords(take(pending.getRecords(), LootRecord::getPlayer, player, maxRecords));
 		batch.setKillTimes(take(pending.getKillTimes(), KillTime::getPlayer, player, maxRecords));
 		batch.setRaidRuns(take(pending.getRaidRuns(), RaidRun::getPlayer, player, maxRecords));
+		batch.setSkillEvents(take(pending.getSkillEvents(), SkillEvent::getPlayer, player, Math.min(maxRecords, SKILL_BATCH_SIZE)));
 		for (LootRecord record : batch.getRecords())
 		{
 			for (LootItem item : record.getItems())
@@ -121,12 +144,16 @@ public class LootQueue
 		return batch;
 	}
 
-	private String firstPlayer(Set<String> skip)
+	private String firstPlayer(Set<String> skip, boolean skillsAlone)
 	{
 		List<String> players = new ArrayList<>();
 		pending.getRecords().forEach(record -> players.add(record.getPlayer()));
 		pending.getKillTimes().forEach(time -> players.add(time.getPlayer()));
 		pending.getRaidRuns().forEach(run -> players.add(run.getPlayer()));
+		if (skillsAlone)
+		{
+			pending.getSkillEvents().forEach(event -> players.add(event.getPlayer()));
+		}
 		for (String player : players)
 		{
 			String key = SnapshotDiff.key(player);
@@ -164,6 +191,7 @@ public class LootQueue
 			pending.getRecords().removeIf(record -> uids.contains(record.getUid()));
 			pending.getKillTimes().removeIf(killTime -> uids.contains(killTime.getUid()));
 			pending.getRaidRuns().removeIf(run -> uids.contains(run.getUid()));
+			pending.getSkillEvents().removeIf(event -> uids.contains(event.getUid()));
 			if (pending.getRecords().isEmpty())
 			{
 				pending.getItemNames().clear();
@@ -176,9 +204,9 @@ public class LootQueue
 	}
 
 	/** Drop the oldest entries in one pass. Removing index 0 in a loop copies the whole list each time. */
-	private static void trim(List<?> items)
+	private static void trim(List<?> items, int max)
 	{
-		int extra = items.size() - MAX_RECORDS;
+		int extra = items.size() - max;
 		if (extra > 0)
 		{
 			items.subList(0, extra).clear();
@@ -192,6 +220,7 @@ public class LootQueue
 		copy.setRecords(new ArrayList<>(src.getRecords()));
 		copy.setKillTimes(new ArrayList<>(src.getKillTimes()));
 		copy.setRaidRuns(new ArrayList<>(src.getRaidRuns()));
+		copy.setSkillEvents(new ArrayList<>(src.getSkillEvents()));
 		copy.setItemNames(new TreeMap<>(src.getItemNames()));
 		copy.setItemTradeable(new TreeMap<>(src.getItemTradeable()));
 		return copy;
@@ -214,6 +243,10 @@ public class LootQueue
 					if (loaded.getRaidRuns() == null)
 					{
 						loaded.setRaidRuns(new ArrayList<>());
+					}
+					if (loaded.getSkillEvents() == null)
+					{
+						loaded.setSkillEvents(new ArrayList<>());
 					}
 					if (loaded.getItemTradeable() == null)
 					{

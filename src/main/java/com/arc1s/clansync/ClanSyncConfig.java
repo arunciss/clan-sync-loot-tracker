@@ -76,8 +76,8 @@ public interface ClanSyncConfig extends Config
 	@ConfigItem(
 		keyName = "uploadLoot",
 		name = "Upload drops and kill times",
-		description = "Send your own drops (items, quantities, prices), kill counts, kill and raid times, personal bests"
-			+ " and raid teammates' names to the website above.",
+		description = "Send your own drops (items, quantities, prices), kill counts, kill and raid times, personal bests,"
+			+ " raid teammates' names and your own level 92/99 and XP milestone (15m, 20m ... 200m) level-ups to the website above.",
 		warning = WARNING,
 		section = websiteSection,
 		position = 4

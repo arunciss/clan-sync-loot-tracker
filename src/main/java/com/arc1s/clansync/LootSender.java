@@ -19,6 +19,9 @@ public class LootSender
 	private final AtomicInteger sessionDrops = new AtomicInteger();
 	private final AtomicInteger sessionKills = new AtomicInteger();
 	private final AtomicInteger sessionTimes = new AtomicInteger();
+	private final AtomicInteger sessionSkills = new AtomicInteger();
+	// The website address that confirmed it accepts skill events this session (null: not known yet).
+	private volatile String skillsEndpoint;
 	private volatile boolean failing;
 	private volatile String lastError;
 	private final AuthGate gate = new AuthGate();
@@ -63,7 +66,8 @@ public class LootSender
 
 	public String describe()
 	{
-		String sent = "sent " + sessionDrops.get() + " drops (" + sessionKills.get() + " kills), " + sessionTimes.get() + " kill times this session";
+		String sent = "sent " + sessionDrops.get() + " drops (" + sessionKills.get() + " kills), " + sessionTimes.get() + " kill times"
+			+ (sessionSkills.get() > 0 ? ", " + sessionSkills.get() + " level/XP milestones" : "") + " this session";
 		int waiting = queue.size();
 		if (!isConfigured(config))
 		{
@@ -104,14 +108,19 @@ public class LootSender
 			}
 			while (true)
 			{
-				LootBatch batch = queue.next(BATCH_SIZE, gate.rejectedNames(endpoint, config.memberToken()));
-				if (batch.getRecords().isEmpty() && batch.getKillTimes().isEmpty() && batch.getRaidRuns().isEmpty())
+				// Older websites reject a batch with nothing they know, so skill events only travel alone once this site
+				// has said it accepts them.
+				boolean skillsAlone = endpoint.equals(skillsEndpoint);
+				LootBatch batch = queue.next(BATCH_SIZE, gate.rejectedNames(endpoint, config.memberToken()), skillsAlone);
+				if (batch.getRecords().isEmpty() && batch.getKillTimes().isEmpty() && batch.getRaidRuns().isEmpty()
+					&& (!skillsAlone || batch.getSkillEvents().isEmpty()))
 				{
 					break;
 				}
+				SiteUploader.Reply reply;
 				try
 				{
-					uploader.post(url, config.memberToken(), batch);
+					reply = uploader.post(url, config.memberToken(), batch);
 				}
 				catch (SiteUploader.RejectedException e)
 				{
@@ -133,7 +142,19 @@ public class LootSender
 					sessionKills.addAndGet(record.getAmount());
 				});
 				batch.getKillTimes().forEach(killTime -> uids.add(killTime.getUid()));
-				batch.getRaidRuns().forEach(run -> uids.add(run.getUid()));
+				batch.getRaidRuns().forEach(run ->
+				{
+					uids.add(run.getUid());
+					log.info("Raid run sent: {} KC {}, {} rooms, team size {}, {} party names ({}), points {}/{}",
+						run.getRaid(), run.getKillCount(), run.getRooms() == null ? 0 : run.getRooms().size(), run.getTeamSize(),
+						run.getTeam() == null ? 0 : run.getTeam().size(), run.getTeamSource(), run.getPersonalPoints(), run.getTotalPoints());
+				});
+				if (reply.skillEvents)
+				{
+					skillsEndpoint = endpoint;
+					batch.getSkillEvents().forEach(event -> uids.add(event.getUid()));
+					sessionSkills.addAndGet(batch.getSkillEvents().size());
+				}
 				sessionDrops.addAndGet(batch.getRecords().size());
 				sessionTimes.addAndGet(batch.getKillTimes().size());
 				queue.remove(uids);
@@ -171,6 +192,10 @@ public class LootSender
 		{
 			return batch.getKillTimes().get(0).getPlayer();
 		}
-		return batch.getRaidRuns().get(0).getPlayer();
+		if (!batch.getRaidRuns().isEmpty())
+		{
+			return batch.getRaidRuns().get(0).getPlayer();
+		}
+		return batch.getSkillEvents().get(0).getPlayer();
 	}
 }

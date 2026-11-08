@@ -22,7 +22,7 @@ public class SiteUploader
 	/** The user's personal plugin code, issued by their clan website. */
 	static final String MEMBER_HEADER = "Auth-Member";
 	/** Plugin version sent in the User-Agent; raise it with every Plugin Hub update. */
-	static final String VERSION = "2.4.2";
+	static final String VERSION = "2.5.1";
 	static final String ROSTER_SEGMENT = "clan-sync";
 	static final String LOOT_SEGMENT = "loot";
 	private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
@@ -83,7 +83,7 @@ public class SiteUploader
 			{
 				throw new IOException(api == null ? "Website did not return a JSON status" : "Website rejected the data" + describe(text));
 			}
-			return new Reply(ascii(api.message).trim(), api.flag("skipped"));
+			return new Reply(ascii(api.message).trim(), api.flag("skipped"), api.flag("skillEvents"));
 		}
 	}
 
@@ -207,11 +207,14 @@ public class SiteUploader
 	{
 		final String message;
 		final boolean skipped;
+		// The site stored (or knowingly ignored) the batch's skill events; older sites leave this false.
+		final boolean skillEvents;
 
-		Reply(String message, boolean skipped)
+		Reply(String message, boolean skipped, boolean skillEvents)
 		{
 			this.message = message;
 			this.skipped = skipped;
+			this.skillEvents = skillEvents;
 		}
 	}
 

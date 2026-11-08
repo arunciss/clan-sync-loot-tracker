@@ -15,14 +15,21 @@ import java.util.function.Predicate;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
+import net.runelite.api.GameState;
 import net.runelite.api.Item;
 import net.runelite.api.ItemContainer;
+import net.runelite.api.Player;
 import net.runelite.api.clan.ClanSettings;
 import net.runelite.api.events.ChatMessage;
+import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.ItemContainerChanged;
 import net.runelite.api.events.MenuOptionClicked;
+import net.runelite.api.events.StatChanged;
+import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.InventoryID;
+import net.runelite.api.gameval.VarbitID;
+import net.runelite.api.widgets.Widget;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.game.ItemStack;
@@ -46,6 +53,7 @@ public class LootCollector
 	private final DurationMessageParser durationParser = new DurationMessageParser();
 	private final KillTimeTracker killTimes = new KillTimeTracker();
 	private final RaidRunTracker raidRuns = new RaidRunTracker();
+	private final SkillMilestones skillMilestones = new SkillMilestones();
 	private final ContainerLedger containers;
 	private final Runnable onRecorded;
 	private final Predicate<String> paused;
@@ -256,7 +264,106 @@ public class LootCollector
 			{
 				return client.getVarcStrValue(id);
 			}
+
+			@Override
+			public List<String> coxPartyNames()
+			{
+				// The raids side panel lists the party; each row's widgets carry the member's name as their op name.
+				List<String> names = new ArrayList<>();
+				Widget list = client.getWidget(InterfaceID.RaidsSidepanel.LIST);
+				if (list == null || list.isHidden())
+				{
+					return names;
+				}
+				Widget[] children = list.getDynamicChildren();
+				if (children != null)
+				{
+					for (Widget child : children)
+					{
+						if (child != null && child.getName() != null && !child.getName().isEmpty())
+						{
+							names.add(child.getName());
+						}
+					}
+				}
+				return names;
+			}
+
+			@Override
+			public List<String> raidPlayerNames()
+			{
+				// Only inside the Chambers of Xeric instance, where nobody but the raid party can be.
+				List<String> names = new ArrayList<>();
+				if (client.getVarbitValue(VarbitID.RAIDS_CLIENT_INDUNGEON) != 1 || client.getTopLevelWorldView() == null)
+				{
+					return names;
+				}
+				for (Player player : client.getTopLevelWorldView().players())
+				{
+					if (player != null && player.getName() != null)
+					{
+						names.add(player.getName());
+					}
+				}
+				return names;
+			}
+
+			@Override
+			public String localPlayerName()
+			{
+				Player local = client.getLocalPlayer();
+				return local == null ? null : local.getName();
+			}
 		};
+	}
+
+	/** Level-ups to 92/99 and XP milestones of the local player's own skills (only what this client sees). */
+	@Subscribe
+	public void onStatChanged(StatChanged event)
+	{
+		if (event.getSkill() == null)
+		{
+			return;
+		}
+		// The baseline is kept even while not tracking, so turning the upload on later does not report old levels.
+		List<SkillEvent> events = skillMilestones.update(event.getSkill().getName(), event.getXp(), event.getLevel());
+		if (events.isEmpty() || !isTracking())
+		{
+			return;
+		}
+		// Skill XP was already read above. The queue file is written off the client thread.
+		String player = Text.sanitize(client.getLocalPlayer().getName());
+		for (SkillEvent skillEvent : events)
+		{
+			skillEvent.setUid(UUID.randomUUID().toString());
+			skillEvent.setPlayer(player);
+			skillEvent.setRecordedAt(Instant.now().toString());
+		}
+		io.execute(() ->
+		{
+			try
+			{
+				for (SkillEvent skillEvent : events)
+				{
+					queue.add(skillEvent);
+				}
+				onRecorded.run();
+			}
+			catch (RuntimeException e)
+			{
+				log.warn("Saving a skill event failed", e);
+			}
+		});
+	}
+
+	@Subscribe
+	public void onGameStateChanged(GameStateChanged event)
+	{
+		GameState state = event.getGameState();
+		if (state == GameState.LOGIN_SCREEN || state == GameState.HOPPING || state == GameState.CONNECTION_LOST)
+		{
+			skillMilestones.reset();
+		}
 	}
 
 	private void saveTime(KillTime time)
