@@ -2,6 +2,7 @@ package com.arc1s.clansync;
 
 import java.awt.BorderLayout;
 import java.awt.Color;
+import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.GridBagLayout;
@@ -12,13 +13,18 @@ import java.awt.event.MouseEvent;
 import java.util.List;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
+import javax.swing.Icon;
 import javax.swing.JButton;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JProgressBar;
 import javax.swing.SwingConstants;
+import javax.swing.SwingUtilities;
 import javax.swing.border.Border;
+import javax.swing.border.CompoundBorder;
 import javax.swing.border.EmptyBorder;
+import javax.swing.border.LineBorder;
+import javax.swing.plaf.basic.BasicButtonUI;
 import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.ui.FontManager;
 
@@ -46,6 +52,9 @@ class ClanTasksSection extends JPanel
 	static final Color FREE_GREEN = new Color(0x69F0AE);
 	static final Color SUCCESS_GREEN = new Color(0x69F0AE);
 	static final Color DISABLED_GREY = new Color(0x757575);
+	static final Color REST_BG = new Color(0x2B2B2B);
+	static final Color HOVER_BG = new Color(0x3F3F3F);
+	static final Color PRESSED_BG = new Color(0x1A1A1A);
 	static final String SENDING = "Sending to the website. Please wait, do not press again.";
 	static final String UNSUPPORTED_BUTTON = "The website does not support this button yet.";
 	static final String NETWORK_FAILURE = "Could not reach the website. Nothing changed. Press again to retry.";
@@ -68,14 +77,10 @@ class ClanTasksSection extends JPanel
 	private final JLabel totalLabel = new JLabel("", SwingConstants.RIGHT);
 	private final JLabel messageLabel = ClanSyncPanel.wrappingLabel();
 	private final JButton doneButton = button("Done", "I finished this task: add the points and give me a new task");
-	private final JButton skipButton = button("Skip \u25BE", "Skip this task");
+	private final JButton skipButton = button("Skip", "Skip this task");
 	private final JPanel optionsPanel = new JPanel(new GridBagLayout());
 	private final JButton takeButton = button("Take a new task", "Get your next clan task now");
 	private final JButton refreshButton = new JButton("Refresh");
-	private final Border doneBorder;
-	private final Border skipBorder;
-	private final Border takeBorder;
-	private final Border refreshBorder;
 	private ClanTask task;
 	private ClanTaskState state;
 	private boolean busy;
@@ -106,10 +111,13 @@ class ClanTasksSection extends JPanel
 			}
 		});
 		header.add(refreshButton, BorderLayout.EAST);
-		doneBorder = doneButton.getBorder();
-		skipBorder = skipButton.getBorder();
-		takeBorder = takeButton.getBorder();
-		refreshBorder = refreshButton.getBorder();
+		installHover(doneButton);
+		installHover(skipButton);
+		installHover(takeButton);
+		installHover(refreshButton);
+		skipButton.setHorizontalTextPosition(SwingConstants.LEFT);
+		skipButton.setIconTextGap(6);
+		syncSkipChrome();
 
 		card.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		titleLabel.setFont(FontManager.getRunescapeBoldFont());
@@ -206,32 +214,21 @@ class ClanTasksSection extends JPanel
 		return "Re-rolls left: " + Math.max(0, rerolls);
 	}
 
+	/** Result text only. A drawn icon, not a glyph, marks success or failure. */
 	static String successLine(String message)
 	{
 		String text = message == null ? "" : message.trim();
-		if (text.startsWith("\u2713"))
-		{
-			return text;
-		}
-		return text.isEmpty() ? "\u2713 Sent." : "\u2713 " + text;
+		return text.isEmpty() ? "Sent." : text;
 	}
 
 	/**
-	 * Red result line. A refusal from the website is shown in its own words (a 409 already says nothing changed).
-	 * A line that is only our own network text already includes the retry sentence.
+	 * Refusal text in the website's own words (a 409 already says nothing changed).
+	 * An empty message becomes the network failure line.
 	 */
 	static String failureLine(String message)
 	{
 		String text = message == null ? "" : message.trim();
-		if (text.isEmpty())
-		{
-			text = NETWORK_FAILURE;
-		}
-		if (text.startsWith("\u2717"))
-		{
-			return text;
-		}
-		return "\u2717 " + text;
+		return text.isEmpty() ? NETWORK_FAILURE : text;
 	}
 
 	/** Dark text on the light difficulty colours, white on red. */
@@ -325,6 +322,7 @@ class ClanTasksSection extends JPanel
 	void setMessage(String text, boolean error)
 	{
 		ClanSyncPanel.setWrapped(messageLabel, text, ClanSyncPanel.TEXT_WIDTH - 12);
+		messageLabel.setIcon(null);
 		messageLabel.setVisible(text != null && !text.isEmpty());
 		messageLabel.setForeground(error ? ColorScheme.PROGRESS_ERROR_COLOR : ColorScheme.LIGHT_GRAY_COLOR);
 	}
@@ -333,6 +331,8 @@ class ClanTasksSection extends JPanel
 	{
 		String line = success ? successLine(message) : failureLine(message);
 		ClanSyncPanel.setWrapped(messageLabel, line, ClanSyncPanel.TEXT_WIDTH - 12);
+		messageLabel.setIcon(success ? PanelIcons.CHECK : PanelIcons.CROSS);
+		messageLabel.setIconTextGap(6);
 		messageLabel.setVisible(true);
 		messageLabel.setForeground(success ? SUCCESS_GREEN : ColorScheme.PROGRESS_ERROR_COLOR);
 	}
@@ -349,22 +349,19 @@ class ClanTasksSection extends JPanel
 		if ("done".equals(which))
 		{
 			doneButton.setText(label);
-			outline(doneButton, true);
 		}
 		else if ("take".equals(which))
 		{
 			takeButton.setText(label);
-			outline(takeButton, true);
 		}
 		else if ("refresh".equals(which))
 		{
 			refreshButton.setText(label);
-			outline(refreshButton, true);
 		}
 		else
 		{
 			skipButton.setText(label);
-			outline(skipButton, true);
+			skipButton.setIcon(null);
 		}
 		rebuildOptions();
 		setMessage(SENDING, false);
@@ -413,6 +410,38 @@ class ClanTasksSection extends JPanel
 		return skipButton.getText();
 	}
 
+	Icon skipIcon()
+	{
+		return skipButton.getIcon();
+	}
+
+	Icon messageIcon()
+	{
+		return messageLabel.getIcon();
+	}
+
+	JButton taskButton(String which)
+	{
+		if ("skip".equals(which))
+		{
+			return skipButton;
+		}
+		if ("take".equals(which))
+		{
+			return takeButton;
+		}
+		if ("refresh".equals(which))
+		{
+			return refreshButton;
+		}
+		return doneButton;
+	}
+
+	JPanel optionRow(String id)
+	{
+		return findNamed(optionsPanel, id);
+	}
+
 	boolean skipOutlined()
 	{
 		return outlined(skipButton);
@@ -457,7 +486,7 @@ class ClanTasksSection extends JPanel
 		optionsPanel.removeAll();
 		boolean show = skipOpen && task != null && !busy;
 		optionsPanel.setVisible(show);
-		skipButton.setText(busy && "skip".equals(workingWhich) ? skipButton.getText() : (skipOpen ? "Skip \u25B2" : "Skip \u25BE"));
+		syncSkipChrome();
 		if (!show)
 		{
 			return;
@@ -477,10 +506,10 @@ class ClanTasksSection extends JPanel
 	private JPanel optionRow(SkipOption option)
 	{
 		boolean on = option.isAvailable();
-		JPanel row = new JPanel(new BorderLayout(6, 2));
+		JPanel row = new JPanel(new BorderLayout(6, 0));
 		row.setOpaque(true);
-		row.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-		row.setBorder(new EmptyBorder(4, 6, 4, 6));
+		row.setBackground(REST_BG);
+		row.setBorder(restBorder());
 		JLabel name = new JLabel(option.getLabel() == null ? "" : option.getLabel());
 		name.setFont(FontManager.getRunescapeFont());
 		name.setForeground(on ? Color.WHITE : DISABLED_GREY);
@@ -501,27 +530,30 @@ class ClanTasksSection extends JPanel
 		{
 			cost.setForeground(FREE_GREEN);
 		}
-		JPanel top = new JPanel(new BorderLayout());
-		top.setOpaque(false);
-		top.add(name, BorderLayout.CENTER);
+		String detail = on ? firstText(option.getHint(), option.getReason()) : firstText(option.getReason(), option.getHint());
+		JLabel info = new JLabel(on ? PanelIcons.INFO : PanelIcons.INFO_MUTED);
+		info.setName("info");
+		JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
+		right.setOpaque(false);
 		if (!option.costTag().isEmpty())
 		{
-			top.add(cost, BorderLayout.EAST);
+			right.add(cost);
 		}
-		String detail = on ? option.getHint() : option.getReason();
-		if (detail == null || detail.isEmpty())
+		if (detail != null)
 		{
-			detail = on ? "" : "";
+			right.add(info);
 		}
-		JLabel hint = new JLabel(detail == null ? "" : detail);
-		hint.setFont(FontManager.getRunescapeSmallFont());
-		hint.setForeground(on ? ColorScheme.LIGHT_GRAY_COLOR : DISABLED_GREY);
-		row.add(top, BorderLayout.NORTH);
-		if (detail != null && !detail.isEmpty())
-		{
-			row.add(hint, BorderLayout.SOUTH);
-		}
-		row.setToolTipText(detail == null || detail.isEmpty() ? null : detail);
+		JPanel line = new JPanel(new BorderLayout(6, 0));
+		line.setOpaque(false);
+		line.setBorder(new EmptyBorder(4, 6, 4, 6));
+		line.add(name, BorderLayout.CENTER);
+		line.add(right, BorderLayout.EAST);
+		row.add(line, BorderLayout.CENTER);
+		String tip = htmlTip(detail);
+		row.setToolTipText(tip);
+		name.setToolTipText(tip);
+		cost.setToolTipText(tip);
+		info.setToolTipText(tip);
 		if (on)
 		{
 			MouseAdapter click = new MouseAdapter()
@@ -534,11 +566,72 @@ class ClanTasksSection extends JPanel
 						actions.skip(task, state, option);
 					}
 				}
+
+				@Override
+				public void mousePressed(MouseEvent e)
+				{
+					paintRow(row, PRESSED_BG, true);
+				}
+
+				@Override
+				public void mouseReleased(MouseEvent e)
+				{
+					paintRow(row, row.contains(SwingUtilities.convertPoint(e.getComponent(), e.getPoint(), row)) ? HOVER_BG : REST_BG,
+						row.contains(SwingUtilities.convertPoint(e.getComponent(), e.getPoint(), row)));
+				}
+
+				@Override
+				public void mouseEntered(MouseEvent e)
+				{
+					paintRow(row, HOVER_BG, true);
+				}
+
+				@Override
+				public void mouseExited(MouseEvent e)
+				{
+					if (!row.contains(SwingUtilities.convertPoint(e.getComponent(), e.getPoint(), row)))
+					{
+						paintRow(row, REST_BG, false);
+					}
+				}
 			};
 			listen(row, click);
 		}
+		else
+		{
+			row.setCursor(Cursor.getDefaultCursor());
+		}
 		row.setName(option.getId());
 		return row;
+	}
+
+	private static void paintRow(JPanel row, Color background, boolean accent)
+	{
+		row.setBackground(background);
+		row.setBorder(accent ? accentBorder() : restBorder());
+		row.repaint();
+	}
+
+	private static String firstText(String preferred, String fallback)
+	{
+		if (preferred != null && !preferred.trim().isEmpty())
+		{
+			return preferred.trim();
+		}
+		if (fallback != null && !fallback.trim().isEmpty())
+		{
+			return fallback.trim();
+		}
+		return null;
+	}
+
+	private static String htmlTip(String text)
+	{
+		if (text == null || text.isEmpty())
+		{
+			return null;
+		}
+		return "<html><body style='width:180px'>" + ClanSyncPanel.escape(text) + "</body></html>";
 	}
 
 	/** Swing does not bubble clicks, so the label under the cursor has to carry the listener too. */
@@ -560,46 +653,149 @@ class ClanTasksSection extends JPanel
 		doneButton.setText("Done");
 		takeButton.setText("Take a new task");
 		refreshButton.setText("Refresh");
-		skipButton.setText(skipOpen ? "Skip \u25B2" : "Skip \u25BE");
-		outline(doneButton, false);
-		outline(skipButton, false);
-		outline(takeButton, false);
-		outline(refreshButton, false);
+		syncSkipChrome();
 	}
 
-	private void outline(JButton button, boolean on)
+	private void syncSkipChrome()
 	{
-		if (on)
+		if (busy && "skip".equals(workingWhich))
 		{
-			button.setBorder(BorderFactory.createLineBorder(WORKING_ORANGE, 2));
-			button.setBorderPainted(true);
+			skipButton.setIcon(null);
+			return;
 		}
-		else if (button == doneButton)
+		skipButton.setText("Skip");
+		skipButton.setIcon(skipOpen ? PanelIcons.UP : PanelIcons.DOWN);
+	}
+
+	private void installHover(JButton button)
+	{
+		button.setUI(new BasicButtonUI());
+		button.setOpaque(true);
+		button.setContentAreaFilled(true);
+		button.setFocusPainted(false);
+		button.setRolloverEnabled(false);
+		button.setForeground(Color.WHITE);
+		button.setBackground(REST_BG);
+		button.setBorder(restBorder());
+		button.addMouseListener(new MouseAdapter()
 		{
-			button.setBorder(doneBorder);
+			@Override
+			public void mouseEntered(MouseEvent e)
+			{
+				button.putClientProperty("clan.hover", Boolean.TRUE);
+				restyle(button);
+			}
+
+			@Override
+			public void mouseExited(MouseEvent e)
+			{
+				button.putClientProperty("clan.hover", Boolean.FALSE);
+				button.putClientProperty("clan.pressed", Boolean.FALSE);
+				restyle(button);
+			}
+
+			@Override
+			public void mousePressed(MouseEvent e)
+			{
+				if (button.isEnabled() && !isWorking(button))
+				{
+					button.putClientProperty("clan.pressed", Boolean.TRUE);
+					restyle(button);
+				}
+			}
+
+			@Override
+			public void mouseReleased(MouseEvent e)
+			{
+				button.putClientProperty("clan.pressed", Boolean.FALSE);
+				restyle(button);
+			}
+		});
+	}
+
+	private boolean isWorking(JButton button)
+	{
+		return busy && button == workingButton();
+	}
+
+	private JButton workingButton()
+	{
+		if ("skip".equals(workingWhich))
+		{
+			return skipButton;
 		}
-		else if (button == skipButton)
+		if ("take".equals(workingWhich))
 		{
-			button.setBorder(skipBorder);
+			return takeButton;
 		}
-		else if (button == takeButton)
+		if ("refresh".equals(workingWhich))
 		{
-			button.setBorder(takeBorder);
+			return refreshButton;
+		}
+		if ("done".equals(workingWhich))
+		{
+			return doneButton;
+		}
+		return null;
+	}
+
+	private void restyle(JButton button)
+	{
+		boolean working = isWorking(button);
+		boolean hover = Boolean.TRUE.equals(button.getClientProperty("clan.hover"));
+		boolean pressed = Boolean.TRUE.equals(button.getClientProperty("clan.pressed"));
+		if (!button.isEnabled() && !working)
+		{
+			button.setBackground(REST_BG);
+			button.setForeground(DISABLED_GREY);
+			button.setBorder(restBorder());
+			button.setCursor(Cursor.getDefaultCursor());
+			return;
+		}
+		button.setForeground(Color.WHITE);
+		button.setCursor(button.isEnabled()
+			? Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+			: Cursor.getDefaultCursor());
+		if (working)
+		{
+			button.setBackground(REST_BG);
+			button.setBorder(accentBorder());
+		}
+		else if (pressed && button.isEnabled())
+		{
+			button.setBackground(PRESSED_BG);
+			button.setBorder(accentBorder());
+		}
+		else if (hover && button.isEnabled())
+		{
+			button.setBackground(HOVER_BG);
+			button.setBorder(accentBorder());
 		}
 		else
 		{
-			button.setBorder(refreshBorder);
+			button.setBackground(REST_BG);
+			button.setBorder(restBorder());
 		}
+	}
+
+	private static Border restBorder()
+	{
+		return BorderFactory.createCompoundBorder(new LineBorder(REST_BG, 1), new EmptyBorder(3, 6, 3, 6));
+	}
+
+	private static Border accentBorder()
+	{
+		return BorderFactory.createCompoundBorder(new LineBorder(WORKING_ORANGE, 1), new EmptyBorder(3, 6, 3, 6));
 	}
 
 	private static boolean outlined(JButton button)
 	{
 		Border border = button.getBorder();
-		if (border instanceof javax.swing.border.LineBorder)
+		if (border instanceof CompoundBorder)
 		{
-			return WORKING_ORANGE.equals(((javax.swing.border.LineBorder) border).getLineColor());
+			border = ((CompoundBorder) border).getOutsideBorder();
 		}
-		return false;
+		return border instanceof LineBorder && WORKING_ORANGE.equals(((LineBorder) border).getLineColor());
 	}
 
 	private void updateButtons()
@@ -608,5 +804,29 @@ class ClanTasksSection extends JPanel
 		skipButton.setEnabled(!busy && task != null);
 		takeButton.setEnabled(!busy);
 		refreshButton.setEnabled(!busy);
+		restyle(doneButton);
+		restyle(skipButton);
+		restyle(takeButton);
+		restyle(refreshButton);
+	}
+
+	private static JPanel findNamed(java.awt.Container parent, String name)
+	{
+		for (java.awt.Component child : parent.getComponents())
+		{
+			if (name.equals(child.getName()) && child instanceof JPanel)
+			{
+				return (JPanel) child;
+			}
+			if (child instanceof java.awt.Container)
+			{
+				JPanel found = findNamed((java.awt.Container) child, name);
+				if (found != null)
+				{
+					return found;
+				}
+			}
+		}
+		return null;
 	}
 }

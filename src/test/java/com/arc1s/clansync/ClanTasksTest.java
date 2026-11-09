@@ -306,7 +306,7 @@ public class ClanTasksTest
 		requests.get(0).body().writeTo(buffer);
 		assertEquals("{\"assignmentId\":418,\"requestId\":\"0123456789abcdef0123456789abcdef\"}", buffer.readUtf8());
 		assertEquals("Task skipped for free (you have this item). New task: Kill Scurrius 25 times.", result.message);
-		assertEquals("\u2713 Task skipped for free (you have this item). New task: Kill Scurrius 25 times.",
+		assertEquals("Task skipped for free (you have this item). New task: Kill Scurrius 25 times.",
 			ClanTasksSection.successLine(result.message));
 	}
 
@@ -323,7 +323,7 @@ public class ClanTasksTest
 		assertFalse(result.codeRefused());
 		assertEquals("noaccess_no_quest", result.reason);
 		assertEquals(message, result.message);
-		assertEquals("\u2717 " + message, ClanTasksSection.failureLine(result.message));
+		assertEquals(message, ClanTasksSection.failureLine(result.message));
 		assertNotNull(result.state);
 	}
 
@@ -338,7 +338,7 @@ public class ClanTasksTest
 		assertTrue(result.replayed());
 		assertTrue(result.accepted());
 		assertEquals("Already done.", result.message);
-		assertEquals("\u2713 Already done.", ClanTasksSection.successLine(result.message));
+		assertEquals("Already done.", ClanTasksSection.successLine(result.message));
 	}
 
 	@Test

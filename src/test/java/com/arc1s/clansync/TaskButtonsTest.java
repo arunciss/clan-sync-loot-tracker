@@ -8,6 +8,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import javax.swing.JPanel;
 import javax.swing.SwingUtilities;
 import org.junit.Test;
 import static org.junit.Assert.assertEquals;
@@ -67,11 +68,13 @@ public class TaskButtonsTest
 			section[0] = new ClanTasksSection(null);
 			section[0].showState(state);
 		});
-		assertEquals("Skip \u25BE", section[0].skipLabel());
+		assertEquals("Skip", section[0].skipLabel());
+		assertTrue(section[0].skipIcon() == PanelIcons.DOWN);
 		assertTrue(section[0].doneEnabled());
 		assertTrue(section[0].refreshEnabled());
 		SwingUtilities.invokeAndWait(() -> section[0].beginWork("skip", "Working... (green log)"));
 		assertEquals("Working... (green log)", section[0].skipLabel());
+		assertTrue(section[0].skipIcon() == null);
 		assertTrue(section[0].skipOutlined());
 		assertFalse(section[0].doneEnabled());
 		assertFalse(section[0].skipEnabled());
@@ -83,11 +86,70 @@ public class TaskButtonsTest
 			section[0].showResult(true, "Skipped for free (green log). New task: Kill Vorkath 50 times.");
 			section[0].endWork();
 		});
-		assertEquals("Skip \u25BE", section[0].skipLabel());
+		assertEquals("Skip", section[0].skipLabel());
+		assertTrue(section[0].skipIcon() == PanelIcons.DOWN);
 		assertFalse(section[0].skipOutlined());
 		assertTrue(section[0].doneEnabled());
 		assertTrue(section[0].refreshEnabled());
-		assertTrue(section[0].messageText().startsWith("\u2713 Skipped for free"));
+		assertTrue(section[0].messageText().startsWith("Skipped for free"));
+		assertTrue(section[0].messageIcon() == PanelIcons.CHECK);
+	}
+
+	@Test
+	public void skipArrowFlipsAndHintsStayInTheTooltip() throws Exception
+	{
+		ClanTaskState state = state("kc", "Priest in Peril", 7);
+		state.getTask().setBoss("Barrows");
+		ClanTasksSection[] section = new ClanTasksSection[1];
+		SwingUtilities.invokeAndWait(() ->
+		{
+			section[0] = new ClanTasksSection(null);
+			section[0].showState(state);
+			section[0].setSkipOpen(true);
+		});
+		assertTrue(section[0].skipIcon() == PanelIcons.UP);
+		JPanel row = section[0].optionRow("greenlog");
+		assertTrue(row.getToolTipText().contains("whole collection log"));
+		assertTrue(row.getToolTipText().startsWith("<html>"));
+		assertFalse(rowText(row).contains("whole collection log"));
+		assertFalse(rowText(row).contains("..."));
+		JPanel muted = section[0].optionRow("noaccess");
+		assertTrue(muted.getToolTipText().contains("Priest in Peril"));
+	}
+
+	@Test
+	public void hoverLightensEnabledButtonsAndRowsOnly() throws Exception
+	{
+		ClanTaskState state = state("kc", null, 3);
+		ClanTasksSection[] section = new ClanTasksSection[1];
+		SwingUtilities.invokeAndWait(() ->
+		{
+			section[0] = new ClanTasksSection(null);
+			section[0].showState(state);
+			section[0].setSkipOpen(true);
+		});
+		javax.swing.JButton done = section[0].taskButton("done");
+		assertEquals(ClanTasksSection.REST_BG, done.getBackground());
+		SwingUtilities.invokeAndWait(() -> fire(done, java.awt.event.MouseEvent.MOUSE_ENTERED));
+		assertEquals(ClanTasksSection.HOVER_BG, done.getBackground());
+		assertTrue(section[0].doneOutlined());
+		assertEquals(java.awt.Cursor.HAND_CURSOR, done.getCursor().getType());
+		SwingUtilities.invokeAndWait(() -> fire(done, java.awt.event.MouseEvent.MOUSE_PRESSED));
+		assertEquals(ClanTasksSection.PRESSED_BG, done.getBackground());
+		SwingUtilities.invokeAndWait(() -> fire(done, java.awt.event.MouseEvent.MOUSE_EXITED));
+		assertEquals(ClanTasksSection.REST_BG, done.getBackground());
+
+		JPanel enabled = section[0].optionRow("greenlog");
+		assertEquals(ClanTasksSection.REST_BG, enabled.getBackground());
+		SwingUtilities.invokeAndWait(() -> fire(enabled, java.awt.event.MouseEvent.MOUSE_ENTERED));
+		assertEquals(ClanTasksSection.HOVER_BG, enabled.getBackground());
+		assertEquals(java.awt.Cursor.HAND_CURSOR, enabled.getCursor().getType());
+
+		JPanel disabled = section[0].optionRow("noaccess");
+		java.awt.Color before = disabled.getBackground();
+		SwingUtilities.invokeAndWait(() -> fire(disabled, java.awt.event.MouseEvent.MOUSE_ENTERED));
+		assertEquals(before, disabled.getBackground());
+		assertEquals(java.awt.Cursor.DEFAULT_CURSOR, disabled.getCursor().getType());
 	}
 
 	@Test
@@ -134,6 +196,48 @@ public class TaskButtonsTest
 		assertEquals("six", ids.id("reroll", 7, () -> "six"));
 		ids.finish("skip-noaccess", 7, 409);
 		assertFalse(ids.has("skip-noaccess", 7));
+	}
+
+	private static void fire(java.awt.Component component, int id)
+	{
+		java.awt.event.MouseEvent event = new java.awt.event.MouseEvent(component, id, System.currentTimeMillis(), 0, 2, 2, 1, false);
+		for (java.awt.event.MouseListener listener : component.getMouseListeners())
+		{
+			if (id == java.awt.event.MouseEvent.MOUSE_ENTERED)
+			{
+				listener.mouseEntered(event);
+			}
+			else if (id == java.awt.event.MouseEvent.MOUSE_EXITED)
+			{
+				listener.mouseExited(event);
+			}
+			else if (id == java.awt.event.MouseEvent.MOUSE_PRESSED)
+			{
+				listener.mousePressed(event);
+			}
+		}
+	}
+
+	private static String rowText(java.awt.Container row)
+	{
+		StringBuilder text = new StringBuilder();
+		collectText(row, text);
+		return text.toString();
+	}
+
+	private static void collectText(java.awt.Container parent, StringBuilder text)
+	{
+		for (java.awt.Component child : parent.getComponents())
+		{
+			if (child instanceof javax.swing.JLabel)
+			{
+				text.append(((javax.swing.JLabel) child).getText());
+			}
+			if (child instanceof java.awt.Container)
+			{
+				collectText((java.awt.Container) child, text);
+			}
+		}
 	}
 
 	private static List<String> ids(List<SkipOption> options)
