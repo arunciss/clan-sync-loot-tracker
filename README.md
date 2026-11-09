@@ -67,9 +67,13 @@ game says you are the clan Owner or a Deputy Owner; everyone else sees only loot
 **Show clan tasks** (`<url>/pvm/...`, off by default), only if your clan website offers clan tasks:
 - about every 90 seconds while you are logged in, the plugin asks the website for your current clan task
   (sending only your personal code) and shows it in the side panel with its progress, difficulty and a wilderness flag;
-- **Done**, **Skip / Re-roll** and **Take a new task** send that choice (the task id and a random request id)
-  to the website, only after you confirm it (Cancel is the default button). Skip / Re-roll works like the
-  Discord skip and uses one re-roll (it is refused when you have none left);
+- **Done**, **Skip** and **Take a new task** send that choice (the task id and the same 32-character request id
+  if you retry after a network error) to the website, only after you confirm it (Cancel is the default button).
+  **Skip** opens Re-roll (uses one re-roll), I have this item, Green log and No access. The website's
+  `skip_options` list decides which of those can be pressed; each row's `action` is the path under
+  `/api/plugin/pvm/` (`reroll`, `skip-haveitem`, `skip-greenlog`, `skip-noaccess`). A refusal comes back as
+  HTTP 409 with the website's own message and changes nothing. Sending the same request id again is answered
+  as already done, not as a second skip;
 - a kill count message or a drop that counts for your task moves the shown progress at once (nothing extra is
   sent); after that kill or drop has been uploaded, the task is checked again early, at most once per 30 seconds,
   and the website's count then replaces the local one;

@@ -106,7 +106,7 @@ public interface ClanSyncConfig extends Config
 		keyName = "clanTasks",
 		name = "Show clan tasks",
 		description = "If your clan website offers clan tasks, show your current task in the side panel with Done,"
-			+ " Skip / Re-roll (uses one re-roll) and Take a new task buttons. Checks the website about every 90 seconds while you are logged in.",
+			+ " Skip (re-roll or a free skip) and Take a new task. Checks the website about every 90 seconds while you are logged in.",
 		warning = WARNING,
 		section = tasksSection,
 		position = 21

@@ -22,7 +22,7 @@ public class SiteUploader
 	/** The user's personal plugin code, issued by their clan website. */
 	static final String MEMBER_HEADER = "Auth-Member";
 	/** Plugin version sent in the User-Agent; raise it with every Plugin Hub update. */
-	static final String VERSION = "2.5.1";
+	static final String VERSION = "2.5.2";
 	static final String ROSTER_SEGMENT = "clan-sync";
 	static final String LOOT_SEGMENT = "loot";
 	private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");

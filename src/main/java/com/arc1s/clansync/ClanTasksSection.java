@@ -7,6 +7,9 @@ import java.awt.FlowLayout;
 import java.awt.GridBagLayout;
 import java.awt.GridLayout;
 import java.awt.Insets;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+import java.util.List;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.JButton;
@@ -14,15 +17,14 @@ import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JProgressBar;
 import javax.swing.SwingConstants;
+import javax.swing.border.Border;
 import javax.swing.border.EmptyBorder;
 import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.ui.FontManager;
 
 /**
- * "Clan tasks" part of the side panel: a card with the current task (title, boss, difficulty, points, progress)
- * and the Done / Skip-Re-roll buttons, or a Take a new task button when there is no task. (The free green-log skip
- * stays a Discord-only command.)
- * Shown only when the website supports clan tasks and the option is on. Must be used on the Swing thread.
+ * "Clan tasks" part of the side panel: a card with the current task and Done, Skip and Take buttons.
+ * Skip opens an inline list (re-roll, and the free skips the task allows). Must be used on the Swing thread.
  */
 class ClanTasksSection extends JPanel
 {
@@ -30,8 +32,8 @@ class ClanTasksSection extends JPanel
 	{
 		void done(ClanTask task);
 
-		/** Skip the task for one re-roll (the normal Discord skip). */
-		void reroll(ClanTask task, ClanTaskState state);
+		/** A Skip-menu row the member chose. The caller confirms, then sends it. */
+		void skip(ClanTask task, ClanTaskState state, SkipOption option);
 
 		void take();
 
@@ -40,10 +42,18 @@ class ClanTasksSection extends JPanel
 
 	static final Color POINTS_COLOR = new Color(0xFFD54F);
 	static final Color WILDY_COLOR = new Color(0xFF5252);
+	static final Color WORKING_ORANGE = new Color(0xFF9800);
+	static final Color FREE_GREEN = new Color(0x69F0AE);
+	static final Color SUCCESS_GREEN = new Color(0x69F0AE);
+	static final Color DISABLED_GREY = new Color(0x757575);
+	static final String SENDING = "Sending to the website. Please wait, do not press again.";
+	static final String UNSUPPORTED_BUTTON = "The website does not support this button yet.";
+	static final String NETWORK_FAILURE = "Could not reach the website. Nothing changed. Press again to retry.";
 	private static final int BUTTON_HEIGHT = 26;
 	/** Wrapping width (CSS units) inside the card: the section and card padding take about 30 px. */
 	private static final int CARD_TEXT_WIDTH = ClanSyncPanel.TEXT_WIDTH - 22;
 
+	private final Actions actions;
 	private final JPanel card = new JPanel(new GridBagLayout());
 	private final JLabel titleLabel = ClanSyncPanel.wrappingLabel();
 	private final JLabel bossLabel = ClanSyncPanel.wrappingLabel();
@@ -58,15 +68,23 @@ class ClanTasksSection extends JPanel
 	private final JLabel totalLabel = new JLabel("", SwingConstants.RIGHT);
 	private final JLabel messageLabel = ClanSyncPanel.wrappingLabel();
 	private final JButton doneButton = button("Done", "I finished this task: add the points and give me a new task");
-	private final JButton rerollButton = button("Skip / Re-roll", null);
+	private final JButton skipButton = button("Skip \u25BE", "Skip this task");
+	private final JPanel optionsPanel = new JPanel(new GridBagLayout());
 	private final JButton takeButton = button("Take a new task", "Get your next clan task now");
 	private final JButton refreshButton = new JButton("Refresh");
+	private final Border doneBorder;
+	private final Border skipBorder;
+	private final Border takeBorder;
+	private final Border refreshBorder;
 	private ClanTask task;
 	private ClanTaskState state;
 	private boolean busy;
+	private boolean skipOpen;
+	private String workingWhich;
 
 	ClanTasksSection(Actions actions)
 	{
+		this.actions = actions;
 		setLayout(new GridBagLayout());
 		setBackground(ColorScheme.DARKER_GRAY_COLOR);
 		setBorder(new EmptyBorder(8, 6, 8, 6));
@@ -81,8 +99,17 @@ class ClanTasksSection extends JPanel
 		refreshButton.setFont(FontManager.getRunescapeSmallFont());
 		refreshButton.setMargin(new Insets(0, 6, 0, 6));
 		refreshButton.setToolTipText("Check the website for your current task now");
-		refreshButton.addActionListener(e -> actions.refresh());
+		refreshButton.addActionListener(e -> {
+			if (actions != null)
+			{
+				actions.refresh();
+			}
+		});
 		header.add(refreshButton, BorderLayout.EAST);
+		doneBorder = doneButton.getBorder();
+		skipBorder = skipButton.getBorder();
+		takeBorder = takeButton.getBorder();
+		refreshBorder = refreshButton.getBorder();
 
 		card.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		titleLabel.setFont(FontManager.getRunescapeBoldFont());
@@ -126,26 +153,31 @@ class ClanTasksSection extends JPanel
 		stats.add(totalLabel);
 
 		messageLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		optionsPanel.setOpaque(false);
+		optionsPanel.setVisible(false);
+		optionsPanel.setBorder(BorderFactory.createCompoundBorder(
+			BorderFactory.createLineBorder(WORKING_ORANGE), new EmptyBorder(4, 4, 4, 4)));
 
 		doneButton.addActionListener(e -> {
-			if (task != null)
+			if (task != null && actions != null)
 			{
 				actions.done(task);
 			}
 		});
-		rerollButton.addActionListener(e -> {
-			if (task != null)
+		skipButton.addActionListener(e -> toggleSkip());
+		takeButton.addActionListener(e -> {
+			if (actions != null)
 			{
-				actions.reroll(task, state);
+				actions.take();
 			}
 		});
-		takeButton.addActionListener(e -> actions.take());
 
 		ClanSyncPanel.stack(this, header, 6);
 		ClanSyncPanel.stack(this, card, 6);
 		ClanSyncPanel.stack(this, stats, 8);
 		ClanSyncPanel.stack(this, doneButton, 4);
-		ClanSyncPanel.stack(this, rerollButton, 4);
+		ClanSyncPanel.stack(this, skipButton, 4);
+		ClanSyncPanel.stack(this, optionsPanel, 4);
 		ClanSyncPanel.stack(this, takeButton, 4);
 		ClanSyncPanel.stack(this, messageLabel, 0);
 		showState(null);
@@ -169,15 +201,37 @@ class ClanTasksSection extends JPanel
 		return button;
 	}
 
-	/** Text on the re-roll button: how many re-rolls are left. */
-	static String rerollButtonText(int rerolls)
-	{
-		return rerolls > 0 ? "Skip / Re-roll (" + rerolls + " left)" : "Skip / Re-roll (none left)";
-	}
-
 	static String rerollsText(int rerolls)
 	{
 		return "Re-rolls left: " + Math.max(0, rerolls);
+	}
+
+	static String successLine(String message)
+	{
+		String text = message == null ? "" : message.trim();
+		if (text.startsWith("\u2713"))
+		{
+			return text;
+		}
+		return text.isEmpty() ? "\u2713 Sent." : "\u2713 " + text;
+	}
+
+	/**
+	 * Red result line. A refusal from the website is shown in its own words (a 409 already says nothing changed).
+	 * A line that is only our own network text already includes the retry sentence.
+	 */
+	static String failureLine(String message)
+	{
+		String text = message == null ? "" : message.trim();
+		if (text.isEmpty())
+		{
+			text = NETWORK_FAILURE;
+		}
+		if (text.startsWith("\u2717"))
+		{
+			return text;
+		}
+		return "\u2717 " + text;
 	}
 
 	/** Dark text on the light difficulty colours, white on red. */
@@ -188,8 +242,13 @@ class ClanTasksSection extends JPanel
 
 	void showState(ClanTaskState newState)
 	{
+		int previousId = task == null ? -1 : task.getAssignmentId();
 		state = newState;
 		task = state == null ? null : state.getTask();
+		if (task == null || task.getAssignmentId() != previousId)
+		{
+			skipOpen = false;
+		}
 		boolean joined = state != null && state.isAvailable() && state.isJoined();
 		if (task != null)
 		{
@@ -249,15 +308,15 @@ class ClanTasksSection extends JPanel
 		rerollsLabel.setText(rerollsText(rerolls));
 		totalLabel.setText(state == null ? "" : state.getPoints() + " pts total");
 		rerollsLabel.getParent().setVisible(joined);
-		rerollButton.setText(rerollButtonText(rerolls));
-		rerollButton.setToolTipText(rerolls > 0
-			? "I do not want this task: skip it for one re-roll and get a new task (same as the Discord skip)"
-			: "No re-rolls left" + (state != null && state.getNextRerollIn() > 0
-			? ": you get the next one after " + state.getNextRerollIn() + " more completed task" + (state.getNextRerollIn() == 1 ? "" : "s") : ""));
 		doneButton.setVisible(task != null);
-		rerollButton.setVisible(task != null);
+		skipButton.setVisible(task != null);
 		takeButton.setVisible(joined && task == null);
-		setMessage("", false);
+		rebuildOptions();
+		if (!busy)
+		{
+			setMessage("", false);
+			restoreLabels();
+		}
 		updateButtons();
 		revalidate();
 		repaint();
@@ -270,27 +329,283 @@ class ClanTasksSection extends JPanel
 		messageLabel.setForeground(error ? ColorScheme.PROGRESS_ERROR_COLOR : ColorScheme.LIGHT_GRAY_COLOR);
 	}
 
-	void setBusy(boolean value)
+	void showResult(boolean success, String message)
 	{
-		busy = value;
+		String line = success ? successLine(message) : failureLine(message);
+		ClanSyncPanel.setWrapped(messageLabel, line, ClanSyncPanel.TEXT_WIDTH - 12);
+		messageLabel.setVisible(true);
+		messageLabel.setForeground(success ? SUCCESS_GREEN : ColorScheme.PROGRESS_ERROR_COLOR);
+	}
+
+	/**
+	 * A button was pressed. {@code which} is {@code done}, {@code skip}, {@code take} or {@code refresh}.
+	 * {@code label} is the "Working... (...)" text for that button.
+	 */
+	void beginWork(String which, String label)
+	{
+		busy = true;
+		workingWhich = which;
+		skipOpen = false;
+		if ("done".equals(which))
+		{
+			doneButton.setText(label);
+			outline(doneButton, true);
+		}
+		else if ("take".equals(which))
+		{
+			takeButton.setText(label);
+			outline(takeButton, true);
+		}
+		else if ("refresh".equals(which))
+		{
+			refreshButton.setText(label);
+			outline(refreshButton, true);
+		}
+		else
+		{
+			skipButton.setText(label);
+			outline(skipButton, true);
+		}
+		rebuildOptions();
+		setMessage(SENDING, false);
 		updateButtons();
+		revalidate();
+		repaint();
 	}
 
-	/** For tests: whether Skip / Re-roll can be pressed right now. */
-	boolean canReroll()
+	void endWork()
 	{
-		return rerollButton.isVisible() && rerollButton.isEnabled();
+		busy = false;
+		workingWhich = null;
+		restoreLabels();
+		updateButtons();
+		revalidate();
+		repaint();
 	}
 
-	String rerollLabel()
+	String messageText()
 	{
-		return rerollButton.getText();
+		return messageLabel.isVisible() ? messageLabel.getToolTipText() : "";
+	}
+
+	boolean doneEnabled()
+	{
+		return doneButton.isEnabled();
+	}
+
+	boolean refreshEnabled()
+	{
+		return refreshButton.isEnabled();
+	}
+
+	boolean takeEnabled()
+	{
+		return takeButton.isEnabled();
+	}
+
+	boolean skipEnabled()
+	{
+		return skipButton.isEnabled();
+	}
+
+	String skipLabel()
+	{
+		return skipButton.getText();
+	}
+
+	boolean skipOutlined()
+	{
+		return outlined(skipButton);
+	}
+
+	boolean doneOutlined()
+	{
+		return outlined(doneButton);
+	}
+
+	List<SkipOption> options()
+	{
+		return SkipOptions.resolve(state);
+	}
+
+	void setSkipOpen(boolean open)
+	{
+		skipOpen = open && task != null && !busy;
+		rebuildOptions();
+		revalidate();
+	}
+
+	boolean isSkipOpen()
+	{
+		return skipOpen;
+	}
+
+	private void toggleSkip()
+	{
+		if (busy || task == null)
+		{
+			return;
+		}
+		skipOpen = !skipOpen;
+		rebuildOptions();
+		revalidate();
+		repaint();
+	}
+
+	private void rebuildOptions()
+	{
+		optionsPanel.removeAll();
+		boolean show = skipOpen && task != null && !busy;
+		optionsPanel.setVisible(show);
+		skipButton.setText(busy && "skip".equals(workingWhich) ? skipButton.getText() : (skipOpen ? "Skip \u25B2" : "Skip \u25BE"));
+		if (!show)
+		{
+			return;
+		}
+		boolean first = true;
+		for (SkipOption option : SkipOptions.resolve(state))
+		{
+			if (!first)
+			{
+				ClanSyncPanel.stack(optionsPanel, Box.createVerticalStrut(4), 0);
+			}
+			first = false;
+			ClanSyncPanel.stack(optionsPanel, optionRow(option), 2);
+		}
+	}
+
+	private JPanel optionRow(SkipOption option)
+	{
+		boolean on = option.isAvailable();
+		JPanel row = new JPanel(new BorderLayout(6, 2));
+		row.setOpaque(true);
+		row.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		row.setBorder(new EmptyBorder(4, 6, 4, 6));
+		JLabel name = new JLabel(option.getLabel() == null ? "" : option.getLabel());
+		name.setFont(FontManager.getRunescapeFont());
+		name.setForeground(on ? Color.WHITE : DISABLED_GREY);
+		JLabel cost = new JLabel(option.costTag());
+		cost.setFont(FontManager.getRunescapeSmallFont());
+		cost.setOpaque(true);
+		cost.setBorder(new EmptyBorder(0, 4, 0, 4));
+		cost.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		if (!on)
+		{
+			cost.setForeground(DISABLED_GREY);
+		}
+		else if (SkipOption.COST_REROLL.equals(option.getCost()))
+		{
+			cost.setForeground(WORKING_ORANGE);
+		}
+		else
+		{
+			cost.setForeground(FREE_GREEN);
+		}
+		JPanel top = new JPanel(new BorderLayout());
+		top.setOpaque(false);
+		top.add(name, BorderLayout.CENTER);
+		if (!option.costTag().isEmpty())
+		{
+			top.add(cost, BorderLayout.EAST);
+		}
+		String detail = on ? option.getHint() : option.getReason();
+		if (detail == null || detail.isEmpty())
+		{
+			detail = on ? "" : "";
+		}
+		JLabel hint = new JLabel(detail == null ? "" : detail);
+		hint.setFont(FontManager.getRunescapeSmallFont());
+		hint.setForeground(on ? ColorScheme.LIGHT_GRAY_COLOR : DISABLED_GREY);
+		row.add(top, BorderLayout.NORTH);
+		if (detail != null && !detail.isEmpty())
+		{
+			row.add(hint, BorderLayout.SOUTH);
+		}
+		row.setToolTipText(detail == null || detail.isEmpty() ? null : detail);
+		if (on)
+		{
+			MouseAdapter click = new MouseAdapter()
+			{
+				@Override
+				public void mouseClicked(MouseEvent e)
+				{
+					if (!busy && actions != null && task != null)
+					{
+						actions.skip(task, state, option);
+					}
+				}
+			};
+			listen(row, click);
+		}
+		row.setName(option.getId());
+		return row;
+	}
+
+	/** Swing does not bubble clicks, so the label under the cursor has to carry the listener too. */
+	private static void listen(java.awt.Component component, MouseAdapter click)
+	{
+		component.addMouseListener(click);
+		component.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR));
+		if (component instanceof java.awt.Container)
+		{
+			for (java.awt.Component child : ((java.awt.Container) component).getComponents())
+			{
+				listen(child, click);
+			}
+		}
+	}
+
+	private void restoreLabels()
+	{
+		doneButton.setText("Done");
+		takeButton.setText("Take a new task");
+		refreshButton.setText("Refresh");
+		skipButton.setText(skipOpen ? "Skip \u25B2" : "Skip \u25BE");
+		outline(doneButton, false);
+		outline(skipButton, false);
+		outline(takeButton, false);
+		outline(refreshButton, false);
+	}
+
+	private void outline(JButton button, boolean on)
+	{
+		if (on)
+		{
+			button.setBorder(BorderFactory.createLineBorder(WORKING_ORANGE, 2));
+			button.setBorderPainted(true);
+		}
+		else if (button == doneButton)
+		{
+			button.setBorder(doneBorder);
+		}
+		else if (button == skipButton)
+		{
+			button.setBorder(skipBorder);
+		}
+		else if (button == takeButton)
+		{
+			button.setBorder(takeBorder);
+		}
+		else
+		{
+			button.setBorder(refreshBorder);
+		}
+	}
+
+	private static boolean outlined(JButton button)
+	{
+		Border border = button.getBorder();
+		if (border instanceof javax.swing.border.LineBorder)
+		{
+			return WORKING_ORANGE.equals(((javax.swing.border.LineBorder) border).getLineColor());
+		}
+		return false;
 	}
 
 	private void updateButtons()
 	{
 		doneButton.setEnabled(!busy && task != null);
-		rerollButton.setEnabled(!busy && task != null && state != null && state.getRerolls() > 0);
+		skipButton.setEnabled(!busy && task != null);
 		takeButton.setEnabled(!busy);
 		refreshButton.setEnabled(!busy);
 	}
