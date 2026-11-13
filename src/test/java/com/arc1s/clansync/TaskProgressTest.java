@@ -136,6 +136,37 @@ public class TaskProgressTest
 	}
 
 	@Test
+	public void womCountStaysUntilTheSiteCatchesUpOrTheBaseChanges()
+	{
+		TaskProgressTracker tracker = new TaskProgressTracker();
+		ClanTask wom = wom(9, 0, 100);
+		tracker.setServerTask(wom, 0);
+		assertTrue(tracker.onKillCount("Phantom Muspah", 117, 0));
+		assertEquals(17, tracker.display(0).getProgress().getCurrent());
+		// The site still has the Wise Old Man number. The local 17 must not fall back to 0 after three minutes.
+		tracker.setServerTask(wom(9, 0, 100), TaskProgressTracker.LOCAL_TTL_MILLIS + 5_000);
+		assertEquals(17, tracker.display(TaskProgressTracker.LOCAL_TTL_MILLIS + 5_000).getProgress().getCurrent());
+		// A new base recomputes from the last kill count seen this session (117 - 110).
+		tracker.setServerTask(wom(9, 0, 110), 20_000);
+		assertEquals(7, tracker.display(20_000).getProgress().getCurrent());
+		// Caught up: the website's own number is shown.
+		ClanTask caughtUp = wom(9, 7, 110);
+		tracker.setServerTask(caughtUp, 21_000);
+		assertSame(caughtUp, tracker.display(21_000));
+		// The shown count did not move, but the queued kill count still asks for the early upload.
+		assertFalse(tracker.onKillCount("Phantom Muspah", 117, 22_000));
+		tracker.markTaskBossUpload("Phantom Muspah");
+		assertTrue(tracker.takeUploadPending());
+	}
+
+	private static ClanTask wom(int id, int current, int base)
+	{
+		return GSON.fromJson("{\"assignment_id\":" + id + ",\"title\":\"T\",\"type\":\"kc\",\"count\":50,"
+			+ "\"progress\":{\"current\":" + current + ",\"target\":50,\"source\":\"wom\"},"
+			+ "\"track\":{\"mode\":\"kc\",\"kc_names\":[\"phantom muspah\"],\"base\":" + base + "}}", ClanTask.class);
+	}
+
+	@Test
 	public void noTrackNoLocalProgress()
 	{
 		TaskProgressTracker tracker = new TaskProgressTracker();

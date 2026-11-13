@@ -54,6 +54,7 @@ public class LootCollector
 	private final KillTimeTracker killTimes = new KillTimeTracker();
 	private final RaidRunTracker raidRuns = new RaidRunTracker();
 	private final SkillMilestones skillMilestones = new SkillMilestones();
+	private final CaveRewardDetector caves = new CaveRewardDetector();
 	private final ContainerLedger containers;
 	private final Runnable onRecorded;
 	private final Predicate<String> paused;
@@ -116,6 +117,10 @@ public class LootCollector
 			record.setContainerItemId(opening.getItemId());
 			opening.claim();
 		}
+		if (caves.ignoreLoot(record.getSource()))
+		{
+			return;
+		}
 		save(record);
 	}
 
@@ -140,9 +145,14 @@ public class LootCollector
 	{
 		if (event.getContainerId() == InventoryID.INV)
 		{
+			Map<Integer, Integer> contents = inventory();
 			if (opening != null)
 			{
-				opening.inventoryChanged(inventory(), client.getTickCount());
+				opening.inventoryChanged(contents, client.getTickCount());
+			}
+			if (isTracking())
+			{
+				recordCape(caves.fromInventory(localPlayerName(), regionId(), contents, Instant.now()));
 			}
 		}
 	}
@@ -162,9 +172,18 @@ public class LootCollector
 		if (parsed != null)
 		{
 			lastKillCount = parsed;
+			queueKillCount(parsed);
+			if (isTracking())
+			{
+				recordCape(caves.fromKillCount(localPlayerName(), parsed.getName(), parsed.getCount(), Instant.now()));
+			}
 			saveTime(killTimes.onKillCount(parsed));
 			notifyKillCount(parsed);
 			return;
+		}
+		if (isTracking())
+		{
+			recordCape(caves.fromCollectionLog(localPlayerName(), event.getMessage(), Instant.now()));
 		}
 		DurationMessage duration = durationParser.parse(event.getMessage(), tick);
 		if (duration != null)
@@ -176,6 +195,11 @@ public class LootCollector
 	@Subscribe
 	public void onGameTick(GameTick tick)
 	{
+		int region = regionId();
+		if (region >= 0 && CaveRewardDetector.capeForRegion(region) < 0)
+		{
+			caves.resetRun();
+		}
 		finishRaid();
 		if (opening == null || !opening.isExpired(client.getTickCount(), CONTAINER_WINDOW_TICKS))
 		{
@@ -363,6 +387,7 @@ public class LootCollector
 		if (state == GameState.LOGIN_SCREEN || state == GameState.HOPPING || state == GameState.CONNECTION_LOST)
 		{
 			skillMilestones.reset();
+			caves.resetRun();
 		}
 	}
 
@@ -448,7 +473,10 @@ public class LootCollector
 				lastKillCount = null;
 			}
 		}
-		record.setUid(UUID.randomUUID().toString());
+		if (record.getUid() == null || record.getUid().isEmpty())
+		{
+			record.setUid(UUID.randomUUID().toString());
+		}
 		record.setPlayer(Text.sanitize(client.getLocalPlayer().getName()));
 		record.setRecordedAt(Instant.now().toString());
 		// Item definitions have to be read here, on the client thread. The ledger and queue files do not.
@@ -556,6 +584,54 @@ public class LootCollector
 		}
 		ClanSettings settings = client.getClanSettings();
 		return settings != null && settings.getName() != null && SnapshotDiff.key(expected).equals(SnapshotDiff.key(Text.sanitize(settings.getName())));
+	}
+
+	private void queueKillCount(KillCount parsed)
+	{
+		if (!isTracking() || parsed.getCount() < 0 || client.getLocalPlayer() == null)
+		{
+			return;
+		}
+		KillCountReport report = KillCountReport.of(localPlayerName(), parsed.getName(), parsed.getCount(), Instant.now());
+		io.execute(() ->
+		{
+			try
+			{
+				queue.add(report);
+				onRecorded.run();
+			}
+			catch (RuntimeException e)
+			{
+				log.warn("Saving a kill count failed", e);
+			}
+		});
+	}
+
+	private void recordCape(LootRecord record)
+	{
+		if (record == null || !isTracking())
+		{
+			return;
+		}
+		save(record);
+	}
+
+	private String localPlayerName()
+	{
+		if (client.getLocalPlayer() == null || client.getLocalPlayer().getName() == null)
+		{
+			return "";
+		}
+		return Text.sanitize(client.getLocalPlayer().getName());
+	}
+
+	private int regionId()
+	{
+		if (client.getLocalPlayer() == null || client.getLocalPlayer().getWorldLocation() == null)
+		{
+			return -1;
+		}
+		return client.getLocalPlayer().getWorldLocation().getRegionID();
 	}
 
 	private Map<Integer, Integer> inventory()

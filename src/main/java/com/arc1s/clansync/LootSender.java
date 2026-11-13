@@ -22,6 +22,8 @@ public class LootSender
 	private final AtomicInteger sessionSkills = new AtomicInteger();
 	// The website address that confirmed it accepts skill events this session (null: not known yet).
 	private volatile String skillsEndpoint;
+	/** The website address that confirmed it accepts kill count reports this session (null: not known yet). */
+	private volatile String killCountsEndpoint;
 	private volatile boolean failing;
 	private volatile String lastError;
 	private final AuthGate gate = new AuthGate();
@@ -108,12 +110,15 @@ public class LootSender
 			}
 			while (true)
 			{
-				// Older websites reject a batch with nothing they know, so skill events only travel alone once this site
-				// has said it accepts them.
+				// Older websites reject a batch with nothing they know, so skill events and kill counts only travel
+				// alone once this site has said it accepts that kind.
 				boolean skillsAlone = endpoint.equals(skillsEndpoint);
-				LootBatch batch = queue.next(BATCH_SIZE, gate.rejectedNames(endpoint, config.memberToken()), skillsAlone);
-				if (batch.getRecords().isEmpty() && batch.getKillTimes().isEmpty() && batch.getRaidRuns().isEmpty()
-					&& (!skillsAlone || batch.getSkillEvents().isEmpty()))
+				boolean countsAlone = endpoint.equals(killCountsEndpoint);
+				LootBatch batch = queue.next(BATCH_SIZE, gate.rejectedNames(endpoint, config.memberToken()), skillsAlone, countsAlone);
+				boolean core = !batch.getRecords().isEmpty() || !batch.getKillTimes().isEmpty() || !batch.getRaidRuns().isEmpty();
+				boolean skills = skillsAlone && batch.getSkillEvents() != null && !batch.getSkillEvents().isEmpty();
+				boolean counts = countsAlone && batch.getKillCounts() != null && !batch.getKillCounts().isEmpty();
+				if (!core && !skills && !counts)
 				{
 					break;
 				}
@@ -154,6 +159,11 @@ public class LootSender
 					skillsEndpoint = endpoint;
 					batch.getSkillEvents().forEach(event -> uids.add(event.getUid()));
 					sessionSkills.addAndGet(batch.getSkillEvents().size());
+				}
+				if (reply.killCounts && batch.getKillCounts() != null)
+				{
+					killCountsEndpoint = endpoint;
+					batch.getKillCounts().forEach(report -> uids.add(report.getUid()));
 				}
 				sessionDrops.addAndGet(batch.getRecords().size());
 				sessionTimes.addAndGet(batch.getKillTimes().size());
@@ -196,6 +206,10 @@ public class LootSender
 		{
 			return batch.getRaidRuns().get(0).getPlayer();
 		}
-		return batch.getSkillEvents().get(0).getPlayer();
+		if (batch.getSkillEvents() != null && !batch.getSkillEvents().isEmpty())
+		{
+			return batch.getSkillEvents().get(0).getPlayer();
+		}
+		return batch.getKillCounts().get(0).getPlayer();
 	}
 }

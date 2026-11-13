@@ -32,7 +32,12 @@ character than the one you are logged in with, the plugin stops recording and se
 **Upload drops and kill times** (`<url>/loot`), only about your own character:
 - your RuneScape name and the time each record was made;
 - drops: the NPC / activity / chest name, its combat level, your kill count, the item ids, quantities and
-  Grand Exchange prices; PvP loot is sent as "PvP" without the other player's name;
+  Grand Exchange prices; PvP loot is sent as "PvP" without the other player's name. A TzTok-Jad or TzKal-Zuk
+  kill count is also sent as the Fire cape or Infernal cape, because the loot tracker does not report those fights;
+- every "Your X kill count is: N" message (including raid completion counts), even when there is no kill time:
+  your name, the boss or activity, the count and the time. The same count is not sent twice. Reports the website
+  has not accepted are dropped after a day, and a batch of only kill counts is sent once the website has said it
+  stores them (`data.killCounts = true`);
 - kill times: the boss or activity, kill count, time, personal best, whether it was a new personal best,
   the raid team size (exact or the game's range such as "11-15 players"), the Tombs of Amascut raid level and
   whether the time was shown with precise timing;

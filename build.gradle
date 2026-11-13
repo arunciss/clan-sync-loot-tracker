@@ -28,7 +28,7 @@ dependencies {
 }
 
 group = 'com.arc1s'
-version = "2.5.2"
+version = "2.5.3"
 
 tasks.withType(JavaCompile).configureEach {
 	options.encoding = 'UTF-8'

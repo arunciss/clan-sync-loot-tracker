@@ -3,6 +3,7 @@ package com.arc1s.clansync;
 import com.google.gson.Gson;
 import com.google.gson.JsonParseException;
 import java.io.IOException;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -19,6 +20,8 @@ public class LootQueue
 	static final int MAX_RECORDS = 20000;
 	static final int MAX_SKILL_EVENTS = 500;
 	static final int SKILL_BATCH_SIZE = 50;
+	/** Unconfirmed kill count reports older than this are dropped. */
+	static final long KILL_COUNT_MAX_AGE_MILLIS = 24L * 60L * 60L * 1000L;
 
 	private final TextStore store;
 	private final Gson gson;
@@ -92,31 +95,72 @@ public class LootQueue
 		write(generation, copy);
 	}
 
+	public void add(KillCountReport report)
+	{
+		if (report == null || report.getUid() == null)
+		{
+			return;
+		}
+		LootBatch copy;
+		int generation;
+		synchronized (this)
+		{
+			for (KillCountReport queued : pending.getKillCounts())
+			{
+				if (report.getUid().equals(queued.getUid()))
+				{
+					return;
+				}
+			}
+			pending.getKillCounts().add(report);
+			trim(pending.getKillCounts(), MAX_RECORDS);
+			generation = ++saveGeneration;
+			copy = snapshot(pending);
+		}
+		write(generation, copy);
+	}
+
 	public synchronized int size()
 	{
-		return pending.getRecords().size() + pending.getKillTimes().size() + pending.getRaidRuns().size() + pending.getSkillEvents().size();
+		return pending.getRecords().size() + pending.getKillTimes().size() + pending.getRaidRuns().size()
+			+ pending.getSkillEvents().size() + pending.getKillCounts().size();
 	}
 
-	public synchronized LootBatch next(int maxRecords)
+	public LootBatch next(int maxRecords)
 	{
-		return next(maxRecords, Collections.emptySet(), true);
+		return next(maxRecords, Collections.emptySet(), true, true);
 	}
 
-	public synchronized LootBatch next(int maxRecords, Set<String> skip)
+	public LootBatch next(int maxRecords, Set<String> skip)
 	{
-		return next(maxRecords, skip, true);
+		return next(maxRecords, skip, true, true);
+	}
+
+	public LootBatch next(int maxRecords, Set<String> skip, boolean skillsAlone)
+	{
+		return next(maxRecords, skip, skillsAlone, false);
 	}
 
 	/**
 	 * Up to maxRecords of each kind, all about one character (the website checks that the personal code belongs to
 	 * the character the data is about). Characters whose normalised name is in skip are left in the queue.
-	 * The batch is empty when nothing else is waiting. Skill events go along with the same character's other data;
-	 * a batch of only skill events is made only when skillsAlone is true (the site is known to accept them).
+	 * The batch is empty when nothing else is waiting. Skill events and kill counts go along with the same
+	 * character's other data. A batch of only skill events, or only kill counts, is made only when that kind
+	 * is allowed alone (the site has already confirmed it accepts them).
 	 */
-	public synchronized LootBatch next(int maxRecords, Set<String> skip, boolean skillsAlone)
+	public LootBatch next(int maxRecords, Set<String> skip, boolean skillsAlone, boolean killCountsAlone)
+	{
+		pruneKillCounts(Instant.now());
+		synchronized (this)
+		{
+			return nextLocked(maxRecords, skip, skillsAlone, killCountsAlone);
+		}
+	}
+
+	private LootBatch nextLocked(int maxRecords, Set<String> skip, boolean skillsAlone, boolean killCountsAlone)
 	{
 		LootBatch batch = new LootBatch();
-		String player = firstPlayer(skip, skillsAlone);
+		String player = firstPlayer(skip, skillsAlone, killCountsAlone);
 		if (player == null)
 		{
 			return batch;
@@ -125,6 +169,11 @@ public class LootQueue
 		batch.setKillTimes(take(pending.getKillTimes(), KillTime::getPlayer, player, maxRecords));
 		batch.setRaidRuns(take(pending.getRaidRuns(), RaidRun::getPlayer, player, maxRecords));
 		batch.setSkillEvents(take(pending.getSkillEvents(), SkillEvent::getPlayer, player, Math.min(maxRecords, SKILL_BATCH_SIZE)));
+		boolean withCore = !batch.getRecords().isEmpty() || !batch.getKillTimes().isEmpty() || !batch.getRaidRuns().isEmpty();
+		if (withCore || killCountsAlone)
+		{
+			batch.setKillCounts(take(pending.getKillCounts(), KillCountReport::getPlayer, player, maxRecords));
+		}
 		for (LootRecord record : batch.getRecords())
 		{
 			for (LootItem item : record.getItems())
@@ -144,7 +193,7 @@ public class LootQueue
 		return batch;
 	}
 
-	private String firstPlayer(Set<String> skip, boolean skillsAlone)
+	private String firstPlayer(Set<String> skip, boolean skillsAlone, boolean killCountsAlone)
 	{
 		List<String> players = new ArrayList<>();
 		pending.getRecords().forEach(record -> players.add(record.getPlayer()));
@@ -153,6 +202,10 @@ public class LootQueue
 		if (skillsAlone)
 		{
 			pending.getSkillEvents().forEach(event -> players.add(event.getPlayer()));
+		}
+		if (killCountsAlone)
+		{
+			pending.getKillCounts().forEach(report -> players.add(report.getPlayer()));
 		}
 		for (String player : players)
 		{
@@ -192,6 +245,7 @@ public class LootQueue
 			pending.getKillTimes().removeIf(killTime -> uids.contains(killTime.getUid()));
 			pending.getRaidRuns().removeIf(run -> uids.contains(run.getUid()));
 			pending.getSkillEvents().removeIf(event -> uids.contains(event.getUid()));
+			pending.getKillCounts().removeIf(report -> uids.contains(report.getUid()));
 			if (pending.getRecords().isEmpty())
 			{
 				pending.getItemNames().clear();
@@ -220,7 +274,8 @@ public class LootQueue
 		copy.setRecords(new ArrayList<>(src.getRecords()));
 		copy.setKillTimes(new ArrayList<>(src.getKillTimes()));
 		copy.setRaidRuns(new ArrayList<>(src.getRaidRuns()));
-		copy.setSkillEvents(new ArrayList<>(src.getSkillEvents()));
+		copy.setSkillEvents(new ArrayList<>(src.getSkillEvents() == null ? new ArrayList<>() : src.getSkillEvents()));
+		copy.setKillCounts(new ArrayList<>(src.getKillCounts() == null ? new ArrayList<>() : src.getKillCounts()));
 		copy.setItemNames(new TreeMap<>(src.getItemNames()));
 		copy.setItemTradeable(new TreeMap<>(src.getItemTradeable()));
 		return copy;
@@ -248,6 +303,10 @@ public class LootQueue
 					{
 						loaded.setSkillEvents(new ArrayList<>());
 					}
+					if (loaded.getKillCounts() == null)
+					{
+						loaded.setKillCounts(new ArrayList<>());
+					}
 					if (loaded.getItemTradeable() == null)
 					{
 						loaded.setItemTradeable(new TreeMap<>());
@@ -261,6 +320,29 @@ public class LootQueue
 			log.warn("Could not read the loot queue", e);
 		}
 		return new LootBatch();
+	}
+
+	/** Drop kill count reports that have waited more than a day without the site confirming them. */
+	void pruneKillCounts(Instant now)
+	{
+		LootBatch copy;
+		int generation;
+		synchronized (this)
+		{
+			if (pending.getKillCounts() == null)
+			{
+				pending.setKillCounts(new ArrayList<>());
+				return;
+			}
+			boolean removed = pending.getKillCounts().removeIf(report -> report.olderThan(now, KILL_COUNT_MAX_AGE_MILLIS));
+			if (!removed)
+			{
+				return;
+			}
+			generation = ++saveGeneration;
+			copy = snapshot(pending);
+		}
+		write(generation, copy);
 	}
 
 	/**

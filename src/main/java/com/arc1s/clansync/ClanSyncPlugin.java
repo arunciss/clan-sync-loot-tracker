@@ -181,9 +181,14 @@ public class ClanSyncPlugin extends Plugin
 			@Override
 			public void onKillCount(String name, int count)
 			{
-				if (tasksOn() && tasksSeen && taskProgress.onKillCount(name, count, System.currentTimeMillis()))
+				if (tasksOn() && tasksSeen)
 				{
-					showLocalTaskProgress();
+					boolean moved = taskProgress.onKillCount(name, count, System.currentTimeMillis());
+					taskProgress.markTaskBossUpload(name);
+					if (moved)
+					{
+						showLocalTaskProgress();
+					}
 				}
 			}
 
