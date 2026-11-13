@@ -3,6 +3,7 @@ package com.arc1s.clansync;
 import com.google.gson.Gson;
 import com.google.gson.JsonParseException;
 import java.io.IOException;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -17,10 +18,17 @@ public class LootQueue
 {
 	static final String FILE = "loot-queue.json";
 	static final int MAX_RECORDS = 20000;
+	static final int MAX_SKILL_EVENTS = 500;
+	static final int SKILL_BATCH_SIZE = 50;
+	/** Unconfirmed kill count reports older than this are dropped. */
+	static final long KILL_COUNT_MAX_AGE_MILLIS = 24L * 60L * 60L * 1000L;
 
 	private final TextStore store;
 	private final Gson gson;
+	private final Object writeLock = new Object();
 	private LootBatch pending;
+	/** Bumped under the monitor on every mutation so a slower older write cannot replace a newer file. */
+	private int saveGeneration;
 
 	public LootQueue(TextStore store, Gson gson)
 	{
@@ -29,57 +37,130 @@ public class LootQueue
 		this.pending = load();
 	}
 
-	public synchronized void add(LootRecord record, Map<Integer, String> names, Map<Integer, Boolean> tradeable)
+	public void add(LootRecord record, Map<Integer, String> names, Map<Integer, Boolean> tradeable)
 	{
-		pending.getRecords().add(record);
-		while (pending.getRecords().size() > MAX_RECORDS)
+		LootBatch copy;
+		int generation;
+		synchronized (this)
 		{
-			pending.getRecords().remove(0);
+			pending.getRecords().add(record);
+			trim(pending.getRecords(), MAX_RECORDS);
+			pending.getItemNames().putAll(names);
+			pending.getItemTradeable().putAll(tradeable);
+			generation = ++saveGeneration;
+			copy = snapshot(pending);
 		}
-		pending.getItemNames().putAll(names);
-		pending.getItemTradeable().putAll(tradeable);
-		save();
+		write(generation, copy);
 	}
 
-	public synchronized void add(KillTime killTime)
+	public void add(KillTime killTime)
 	{
-		pending.getKillTimes().add(killTime);
-		while (pending.getKillTimes().size() > MAX_RECORDS)
+		LootBatch copy;
+		int generation;
+		synchronized (this)
 		{
-			pending.getKillTimes().remove(0);
+			pending.getKillTimes().add(killTime);
+			trim(pending.getKillTimes(), MAX_RECORDS);
+			generation = ++saveGeneration;
+			copy = snapshot(pending);
 		}
-		save();
+		write(generation, copy);
 	}
 
-	public synchronized void add(RaidRun run)
+	public void add(RaidRun run)
 	{
-		pending.getRaidRuns().add(run);
-		while (pending.getRaidRuns().size() > MAX_RECORDS)
+		LootBatch copy;
+		int generation;
+		synchronized (this)
 		{
-			pending.getRaidRuns().remove(0);
+			pending.getRaidRuns().add(run);
+			trim(pending.getRaidRuns(), MAX_RECORDS);
+			generation = ++saveGeneration;
+			copy = snapshot(pending);
 		}
-		save();
+		write(generation, copy);
+	}
+
+	public void add(SkillEvent event)
+	{
+		LootBatch copy;
+		int generation;
+		synchronized (this)
+		{
+			pending.getSkillEvents().add(event);
+			trim(pending.getSkillEvents(), MAX_SKILL_EVENTS);
+			generation = ++saveGeneration;
+			copy = snapshot(pending);
+		}
+		write(generation, copy);
+	}
+
+	public void add(KillCountReport report)
+	{
+		if (report == null || report.getUid() == null)
+		{
+			return;
+		}
+		LootBatch copy;
+		int generation;
+		synchronized (this)
+		{
+			for (KillCountReport queued : pending.getKillCounts())
+			{
+				if (report.getUid().equals(queued.getUid()))
+				{
+					return;
+				}
+			}
+			pending.getKillCounts().add(report);
+			trim(pending.getKillCounts(), MAX_RECORDS);
+			generation = ++saveGeneration;
+			copy = snapshot(pending);
+		}
+		write(generation, copy);
 	}
 
 	public synchronized int size()
 	{
-		return pending.getRecords().size() + pending.getKillTimes().size() + pending.getRaidRuns().size();
+		return pending.getRecords().size() + pending.getKillTimes().size() + pending.getRaidRuns().size()
+			+ pending.getSkillEvents().size() + pending.getKillCounts().size();
 	}
 
-	public synchronized LootBatch next(int maxRecords)
+	public LootBatch next(int maxRecords)
 	{
-		return next(maxRecords, Collections.emptySet());
+		return next(maxRecords, Collections.emptySet(), true, true);
+	}
+
+	public LootBatch next(int maxRecords, Set<String> skip)
+	{
+		return next(maxRecords, skip, true, true);
+	}
+
+	public LootBatch next(int maxRecords, Set<String> skip, boolean skillsAlone)
+	{
+		return next(maxRecords, skip, skillsAlone, false);
 	}
 
 	/**
 	 * Up to maxRecords of each kind, all about one character (the website checks that the personal code belongs to
 	 * the character the data is about). Characters whose normalised name is in skip are left in the queue.
-	 * The batch is empty when nothing else is waiting.
+	 * The batch is empty when nothing else is waiting. Skill events and kill counts go along with the same
+	 * character's other data. A batch of only skill events, or only kill counts, is made only when that kind
+	 * is allowed alone (the site has already confirmed it accepts them).
 	 */
-	public synchronized LootBatch next(int maxRecords, Set<String> skip)
+	public LootBatch next(int maxRecords, Set<String> skip, boolean skillsAlone, boolean killCountsAlone)
+	{
+		pruneKillCounts(Instant.now());
+		synchronized (this)
+		{
+			return nextLocked(maxRecords, skip, skillsAlone, killCountsAlone);
+		}
+	}
+
+	private LootBatch nextLocked(int maxRecords, Set<String> skip, boolean skillsAlone, boolean killCountsAlone)
 	{
 		LootBatch batch = new LootBatch();
-		String player = firstPlayer(skip);
+		String player = firstPlayer(skip, skillsAlone, killCountsAlone);
 		if (player == null)
 		{
 			return batch;
@@ -87,6 +168,12 @@ public class LootQueue
 		batch.setRecords(take(pending.getRecords(), LootRecord::getPlayer, player, maxRecords));
 		batch.setKillTimes(take(pending.getKillTimes(), KillTime::getPlayer, player, maxRecords));
 		batch.setRaidRuns(take(pending.getRaidRuns(), RaidRun::getPlayer, player, maxRecords));
+		batch.setSkillEvents(take(pending.getSkillEvents(), SkillEvent::getPlayer, player, Math.min(maxRecords, SKILL_BATCH_SIZE)));
+		boolean withCore = !batch.getRecords().isEmpty() || !batch.getKillTimes().isEmpty() || !batch.getRaidRuns().isEmpty();
+		if (withCore || killCountsAlone)
+		{
+			batch.setKillCounts(take(pending.getKillCounts(), KillCountReport::getPlayer, player, maxRecords));
+		}
 		for (LootRecord record : batch.getRecords())
 		{
 			for (LootItem item : record.getItems())
@@ -106,12 +193,20 @@ public class LootQueue
 		return batch;
 	}
 
-	private String firstPlayer(Set<String> skip)
+	private String firstPlayer(Set<String> skip, boolean skillsAlone, boolean killCountsAlone)
 	{
 		List<String> players = new ArrayList<>();
 		pending.getRecords().forEach(record -> players.add(record.getPlayer()));
 		pending.getKillTimes().forEach(time -> players.add(time.getPlayer()));
 		pending.getRaidRuns().forEach(run -> players.add(run.getPlayer()));
+		if (skillsAlone)
+		{
+			pending.getSkillEvents().forEach(event -> players.add(event.getPlayer()));
+		}
+		if (killCountsAlone)
+		{
+			pending.getKillCounts().forEach(report -> players.add(report.getPlayer()));
+		}
 		for (String player : players)
 		{
 			String key = SnapshotDiff.key(player);
@@ -140,17 +235,50 @@ public class LootQueue
 		return out;
 	}
 
-	public synchronized void remove(Set<String> uids)
+	public void remove(Set<String> uids)
 	{
-		pending.getRecords().removeIf(record -> uids.contains(record.getUid()));
-		pending.getKillTimes().removeIf(killTime -> uids.contains(killTime.getUid()));
-		pending.getRaidRuns().removeIf(run -> uids.contains(run.getUid()));
-		if (pending.getRecords().isEmpty())
+		LootBatch copy;
+		int generation;
+		synchronized (this)
 		{
-			pending.getItemNames().clear();
-			pending.getItemTradeable().clear();
+			pending.getRecords().removeIf(record -> uids.contains(record.getUid()));
+			pending.getKillTimes().removeIf(killTime -> uids.contains(killTime.getUid()));
+			pending.getRaidRuns().removeIf(run -> uids.contains(run.getUid()));
+			pending.getSkillEvents().removeIf(event -> uids.contains(event.getUid()));
+			pending.getKillCounts().removeIf(report -> uids.contains(report.getUid()));
+			if (pending.getRecords().isEmpty())
+			{
+				pending.getItemNames().clear();
+				pending.getItemTradeable().clear();
+			}
+			generation = ++saveGeneration;
+			copy = snapshot(pending);
 		}
-		save();
+		write(generation, copy);
+	}
+
+	/** Drop the oldest entries in one pass. Removing index 0 in a loop copies the whole list each time. */
+	private static void trim(List<?> items, int max)
+	{
+		int extra = items.size() - max;
+		if (extra > 0)
+		{
+			items.subList(0, extra).clear();
+		}
+	}
+
+	private static LootBatch snapshot(LootBatch src)
+	{
+		LootBatch copy = new LootBatch();
+		copy.setSchemaVersion(src.getSchemaVersion());
+		copy.setRecords(new ArrayList<>(src.getRecords()));
+		copy.setKillTimes(new ArrayList<>(src.getKillTimes()));
+		copy.setRaidRuns(new ArrayList<>(src.getRaidRuns()));
+		copy.setSkillEvents(new ArrayList<>(src.getSkillEvents() == null ? new ArrayList<>() : src.getSkillEvents()));
+		copy.setKillCounts(new ArrayList<>(src.getKillCounts() == null ? new ArrayList<>() : src.getKillCounts()));
+		copy.setItemNames(new TreeMap<>(src.getItemNames()));
+		copy.setItemTradeable(new TreeMap<>(src.getItemTradeable()));
+		return copy;
 	}
 
 	private LootBatch load()
@@ -171,6 +299,14 @@ public class LootQueue
 					{
 						loaded.setRaidRuns(new ArrayList<>());
 					}
+					if (loaded.getSkillEvents() == null)
+					{
+						loaded.setSkillEvents(new ArrayList<>());
+					}
+					if (loaded.getKillCounts() == null)
+					{
+						loaded.setKillCounts(new ArrayList<>());
+					}
 					if (loaded.getItemTradeable() == null)
 					{
 						loaded.setItemTradeable(new TreeMap<>());
@@ -186,15 +322,52 @@ public class LootQueue
 		return new LootBatch();
 	}
 
-	private void save()
+	/** Drop kill count reports that have waited more than a day without the site confirming them. */
+	void pruneKillCounts(Instant now)
 	{
-		try
+		LootBatch copy;
+		int generation;
+		synchronized (this)
 		{
-			store.write(FILE, gson.toJson(pending));
+			if (pending.getKillCounts() == null)
+			{
+				pending.setKillCounts(new ArrayList<>());
+				return;
+			}
+			boolean removed = pending.getKillCounts().removeIf(report -> report.olderThan(now, KILL_COUNT_MAX_AGE_MILLIS));
+			if (!removed)
+			{
+				return;
+			}
+			generation = ++saveGeneration;
+			copy = snapshot(pending);
 		}
-		catch (IOException e)
+		write(generation, copy);
+	}
+
+	/**
+	 * JSON and the file write stay off the monitor. The game thread calls {@link #size()} every tick;
+	 * holding the monitor across a multi-megabyte rewrite stalls the whole client until the write returns.
+	 */
+	private void write(int generation, LootBatch copy)
+	{
+		synchronized (writeLock)
 		{
-			log.warn("Could not save the loot queue", e);
+			synchronized (this)
+			{
+				if (generation != saveGeneration)
+				{
+					return;
+				}
+			}
+			try
+			{
+				store.write(FILE, gson.toJson(copy));
+			}
+			catch (IOException e)
+			{
+				log.warn("Could not save the loot queue", e);
+			}
 		}
 	}
 }

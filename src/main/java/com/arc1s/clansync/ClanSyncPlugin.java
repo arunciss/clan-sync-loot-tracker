@@ -18,8 +18,10 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import javax.inject.Inject;
 import javax.swing.JOptionPane;
@@ -114,6 +116,8 @@ public class ClanSyncPlugin extends Plugin
 	private OverlayManager overlayManager;
 
 	private final AtomicBoolean running = new AtomicBoolean();
+	/** Stops a slow upload from queueing another send on every 10th tick. There is only one client executor thread. */
+	private final AtomicBoolean lootSendQueued = new AtomicBoolean();
 	private SnapshotStore store;
 	private SiteUploader uploader;
 	private ClanSyncPanel panel;
@@ -138,8 +142,10 @@ public class ClanSyncPlugin extends Plugin
 	/** True while the settings are being set to the website's values (those changes must not be sent back). */
 	private volatile boolean applyingServerPrefs;
 	private final AuthGate tasksGate = new AuthGate();
-	private final AtomicBoolean tasksBusy = new AtomicBoolean();
-	private final Map<String, String> pendingTaskRequests = new ConcurrentHashMap<>();
+	/** Task checks and task buttons, never the loot upload thread. */
+	private ExecutorService taskThreads;
+	private TaskButtonQueue taskQueue;
+	private final TaskRequestIds taskRequestIds = new TaskRequestIds();
 	private volatile long nextTaskPoll;
 	private volatile long lastTaskRefresh;
 	private volatile boolean tasksSeen;
@@ -160,7 +166,8 @@ public class ClanSyncPlugin extends Plugin
 	{
 		TextStore files = new PluginDirectoryStore(getPluginDirectory());
 		store = new SnapshotStore(files, gson);
-		uploader = new SiteUploader(okHttpClient, gson);
+		OkHttpClient http = withTimeouts(okHttpClient);
+		uploader = new SiteUploader(http, gson);
 		running.set(false);
 		nextAutoAttempt = 0;
 		rosterShown = false;
@@ -168,15 +175,20 @@ public class ClanSyncPlugin extends Plugin
 		lootQueue = new LootQueue(files, gson);
 		lootSender = new LootSender(lootQueue, uploader, config);
 		lootCollector = new LootCollector(client, itemManager, config, lootQueue, new ContainerLedger(files, gson), this::showLootQueue,
-			player -> lootSender.isRejected(player));
+			player -> lootSender.isRejected(player), executor);
 		lootCollector.setTaskListener(new LootCollector.TaskListener()
 		{
 			@Override
 			public void onKillCount(String name, int count)
 			{
-				if (tasksOn() && tasksSeen && taskProgress.onKillCount(name, count, System.currentTimeMillis()))
+				if (tasksOn() && tasksSeen)
 				{
-					showLocalTaskProgress();
+					boolean moved = taskProgress.onKillCount(name, count, System.currentTimeMillis());
+					taskProgress.markTaskBossUpload(name);
+					if (moved)
+					{
+						showLocalTaskProgress();
+					}
 				}
 			}
 
@@ -191,7 +203,14 @@ public class ClanSyncPlugin extends Plugin
 		});
 		eventBus.register(lootCollector);
 
-		tasksClient = new ClanTasksClient(okHttpClient, gson);
+		tasksClient = new ClanTasksClient(http, gson);
+		taskThreads = Executors.newSingleThreadExecutor(runnable ->
+		{
+			Thread thread = new Thread(runnable, "clan-sync-tasks");
+			thread.setDaemon(true);
+			return thread;
+		});
+		taskQueue = new TaskButtonQueue(taskThreads);
 		taskOverlay = new TaskCompleteOverlay();
 		overlayManager.add(taskOverlay);
 		taskProgressOverlay = new ClanTaskOverlay(this, () -> config.taskOverlay() && tasksSeen && tasksOn()
@@ -209,9 +228,9 @@ public class ClanSyncPlugin extends Plugin
 			}
 
 			@Override
-			public void reroll(ClanTask task, ClanTaskState state)
+			public void skip(ClanTask task, ClanTaskState state, SkipOption option)
 			{
-				confirmReroll(task, state);
+				confirmSkip(task, state, option);
 			}
 
 			@Override
@@ -224,7 +243,7 @@ public class ClanSyncPlugin extends Plugin
 			public void refresh()
 			{
 				nextTaskPoll = 0;
-				refreshTasks();
+				refreshTasks(true);
 			}
 		});
 		navButton = NavigationButton.builder()
@@ -252,6 +271,11 @@ public class ClanSyncPlugin extends Plugin
 	@Override
 	protected void shutDown()
 	{
+		if (taskThreads != null)
+		{
+			taskThreads.shutdown();
+			taskThreads = null;
+		}
 		eventBus.unregister(lootCollector);
 		// One last attempt to send what is queued; whatever fails stays in the queue file for next time.
 		LootSender sender = lootSender;
@@ -286,7 +310,7 @@ public class ClanSyncPlugin extends Plugin
 		}
 		if (tasksOn() && System.currentTimeMillis() >= nextTaskPoll)
 		{
-			refreshTasks();
+			refreshTasks(false);
 		}
 		showRosterIfLeader(canSyncRoster());
 		if (++tickCounter % AUTO_CHECK_TICKS != 0 || !rosterUploadsOn() || running.get())
@@ -390,22 +414,56 @@ public class ClanSyncPlugin extends Plugin
 		{
 			return;
 		}
-		executor.execute(() ->
+		if (!lootSendQueued.compareAndSet(false, true))
 		{
-			lootSender.sendAll();
-			if (lootSender.isFailing())
+			return;
+		}
+		try
+		{
+			executor.execute(() ->
 			{
-				lootPausedUntil = tickCounter + LOOT_SEND_TICKS;
-			}
-			else if (taskProgress.takeUploadPending())
-			{
-				checkTasksSoon();
-			}
-			if (ui != null)
-			{
-				ui.setLoot(lootSender.describe());
-			}
-		});
+				try
+				{
+					lootSender.sendAll();
+					if (lootSender.isFailing())
+					{
+						lootPausedUntil = tickCounter + LOOT_SEND_TICKS;
+					}
+					else if (taskProgress.takeUploadPending())
+					{
+						checkTasksSoon();
+					}
+					if (ui != null)
+					{
+						ui.setLoot(lootSender.describe());
+					}
+				}
+				finally
+				{
+					lootSendQueued.set(false);
+				}
+			});
+		}
+		catch (RuntimeException e)
+		{
+			lootSendQueued.set(false);
+			throw e;
+		}
+	}
+
+	/**
+	 * The shared client has a 10 second read timeout and no overall call timeout (OkHttp 3.14 defaults).
+	 * {@code newBuilder()} keeps RuneLite's interceptors and dispatcher. A call that trickles bytes would
+	 * otherwise pin the client's only scheduled thread until restart.
+	 */
+	private static OkHttpClient withTimeouts(OkHttpClient base)
+	{
+		return base.newBuilder()
+			.connectTimeout(10, TimeUnit.SECONDS)
+			.readTimeout(20, TimeUnit.SECONDS)
+			.writeTimeout(20, TimeUnit.SECONDS)
+			.callTimeout(30, TimeUnit.SECONDS)
+			.build();
 	}
 
 	private void showLootQueue()
@@ -723,7 +781,7 @@ public class ClanSyncPlugin extends Plugin
 	private void resetTasks()
 	{
 		tasksGate.clear();
-		pendingTaskRequests.clear();
+		taskRequestIds.clear();
 		tasksSeen = false;
 		nextTaskPoll = 0;
 		serverWilderness = null;
@@ -771,46 +829,57 @@ public class ClanSyncPlugin extends Plugin
 		}
 	}
 
-	private void refreshTasks()
+	private void refreshTasks(boolean fromButton)
 	{
 		ClanSyncPanel ui = panel;
-		if (ui == null || !tasksOn() || !tasksBusy.compareAndSet(false, true))
+		if (ui == null || !tasksOn() || taskQueue == null)
 		{
 			return;
 		}
 		lastTaskRefresh = System.currentTimeMillis();
 		nextTaskPoll = lastTaskRefresh + TASK_POLL_MILLIS;
+		if (fromButton)
+		{
+			ui.setTasksWorking("refresh", "Working... (refresh)");
+		}
 		String endpoint = config.endpoint();
 		String code = config.memberToken();
-		executor.execute(() ->
+		taskQueue.submit(() ->
 		{
 			try
 			{
-				handleTaskResult(ui, tasksClient.current(endpoint, code), endpoint, code, null, null);
+				handleTaskResult(ui, tasksClient.current(endpoint, code), endpoint, code, fromButton ? "refresh" : null, null);
 			}
 			catch (IOException | RuntimeException e)
 			{
 				log.debug("Clan task check failed", e);
 				nextTaskPoll = System.currentTimeMillis() + TASK_RETRY_MILLIS;
-				if (tasksSeen)
+				if (fromButton)
+				{
+					ui.setTasksResult(false, ClanTasksSection.NETWORK_FAILURE);
+				}
+				else if (tasksSeen)
 				{
 					ui.setTasksMessage("Could not reach the website: " + e.getMessage(), true);
 				}
 			}
 			finally
 			{
-				tasksBusy.set(false);
+				if (fromButton)
+				{
+					ui.setTasksWorking(null, null);
+				}
 			}
 		});
 	}
 
-	/** Shared handling for the state check and the buttons. Runs on the executor. */
+	/** Shared handling for the state check and the buttons. Runs on the task executor, not the loot thread. */
 	private void handleTaskResult(ClanSyncPanel ui, ClanTasksClient.Result result, String endpoint, String code, String action, ClanTask acted)
 	{
-		if (!result.supported && action != null)
+		if (action != null && (result.status == 404 || !result.supported))
 		{
 			// An older website without this button: keep the section and say so.
-			ui.setTasksMessage("The website does not support this button yet. Use your clan's other task tools instead.", true);
+			ui.setTasksResult(false, ClanTasksSection.UNSUPPORTED_BUTTON);
 			return;
 		}
 		if (!result.supported)
@@ -827,7 +896,7 @@ public class ClanSyncPlugin extends Plugin
 		if (result.codeRefused())
 		{
 			tasksGate.reject(endpoint, code);
-			if (tasksSeen)
+			if (tasksSeen || action != null)
 			{
 				ui.setTasksMessage(result.message + ". Clan task checks are paused until you enter a new code.", true);
 			}
@@ -836,9 +905,14 @@ public class ClanSyncPlugin extends Plugin
 		if (result.status == 429 || result.status >= 500)
 		{
 			nextTaskPoll = System.currentTimeMillis() + (result.status == 429 ? TASK_BUSY_MILLIS : TASK_RETRY_MILLIS);
-			if (tasksSeen)
+			String text = result.message.isEmpty() ? "Website is busy, trying again later" : result.message;
+			if (action != null)
 			{
-				ui.setTasksMessage(result.message.isEmpty() ? "Website is busy, trying again later" : result.message, true);
+				ui.setTasksResult(false, text);
+			}
+			else if (tasksSeen)
+			{
+				ui.setTasksMessage(text, true);
 			}
 			return;
 		}
@@ -860,15 +934,23 @@ public class ClanSyncPlugin extends Plugin
 		}
 		if (action != null)
 		{
-			ui.setTasksMessage(result.message, !result.ok());
-			if (result.ok() && ClanTasksClient.ACTION_DONE.equals(action))
+			if (result.accepted())
 			{
-				popup(result.completed != null ? result.completed : acted);
+				ui.setTasksResult(true, result.message);
+				if (ClanTasksClient.ACTION_DONE.equals(action))
+				{
+					popup(result.completed != null ? result.completed : acted);
+				}
 			}
-			if (!result.ok() && result.state == null)
+			else
 			{
-				// The task changed elsewhere (another tool or device): show the current one.
-				nextTaskPoll = 0;
+				// 409 and other refusals: the website's message is the whole explanation.
+				ui.setTasksResult(false, result.message);
+				if (result.state == null)
+				{
+					// The task changed elsewhere (Discord, another device): show the current one.
+					nextTaskPoll = 0;
+				}
 			}
 		}
 	}
@@ -899,7 +981,7 @@ public class ClanSyncPlugin extends Plugin
 	}
 
 	/**
-	 * The website keeps the task preferences (other clan tools may use the same ones), so its values win: the settings show them.
+	 * The website keeps the task preferences (Discord uses the same ones), so its values win: the settings show them.
 	 * A change the user made while they could not be sent yet is sent now instead.
 	 */
 	private void applyServerPrefs(ClanTaskState state)
@@ -970,7 +1052,7 @@ public class ClanSyncPlugin extends Plugin
 				}
 				else if (!result.supported)
 				{
-					ui.setTasksMessage("This website cannot save task preferences yet.", true);
+					ui.setTasksMessage("This website cannot save task preferences yet (wilderness: use /pvm_wildy on Discord).", true);
 				}
 				else
 				{
@@ -1011,29 +1093,38 @@ public class ClanSyncPlugin extends Plugin
 			+ "You get " + task.getPoints() + " points and a new task right away. This cannot be undone.";
 		if (confirm("Clan task: Done", text, "Yes, done"))
 		{
-			runTaskAction(ClanTasksClient.ACTION_DONE, task);
+			runTaskAction(ClanTasksClient.ACTION_DONE, task, "done", "Working... (done)");
 		}
 	}
 
-	private void confirmReroll(ClanTask task, ClanTaskState state)
+	private void confirmSkip(ClanTask task, ClanTaskState state, SkipOption option)
 	{
-		int rerolls = state == null ? 0 : state.getRerolls();
-		if (rerolls < 1)
+		if (option == null || !option.isAvailable() || option.endpoint() == null || option.endpoint().isEmpty())
 		{
-			JOptionPane.showMessageDialog(panel, noRerollsText(state == null ? 0 : state.getNextRerollIn()), "Clan task: Skip / Re-roll",
-				JOptionPane.INFORMATION_MESSAGE);
 			return;
 		}
-		if (confirm("Clan task: Skip / Re-roll", rerollConfirmText(task, rerolls), "Yes, re-roll"))
+		String text = SkipOption.REROLL.equals(option.getId())
+			? rerollConfirmText(task, state == null ? 0 : state.getRerolls())
+			: skipConfirmText(task, option);
+		String yes = SkipOption.REROLL.equals(option.getId()) ? "Yes, re-roll" : "Yes, skip";
+		if (confirm("Clan task: " + option.getLabel(), text, yes))
 		{
-			runTaskAction(ClanTasksClient.ACTION_REROLL, task);
+			runTaskAction(option.endpoint(), task, "skip", option.workingText());
 		}
+	}
+
+	static String skipConfirmText(ClanTask task, SkipOption option)
+	{
+		String detail = option.getHint() == null ? "" : option.getHint().trim();
+		return "Skip this task?\n\n" + task.displayTitle() + "\n\n"
+			+ (detail.isEmpty() ? "" : detail + "\n")
+			+ "This cannot be undone.";
 	}
 
 	static String rerollConfirmText(ClanTask task, int rerolls)
 	{
 		return "Skip this task and get a new one?\n\n" + task.displayTitle() + "\n\n"
-			+ "This uses 1 re-roll.\n"
+			+ "This uses 1 re-roll, the same as the Discord skip.\n"
 			+ "Re-rolls left: " + rerolls + " now, " + (rerolls - 1) + " after this. This cannot be undone.";
 	}
 
@@ -1047,39 +1138,29 @@ public class ClanSyncPlugin extends Plugin
 	{
 		if (confirm("Clan tasks", "Get a new clan task now?", "Get a task"))
 		{
-			runTaskAction(ClanTasksClient.ACTION_TAKE, null);
+			runTaskAction(ClanTasksClient.ACTION_TAKE, null, "take", "Working... (take)");
 		}
 	}
 
-	private void runTaskAction(String action, ClanTask task)
+	private void runTaskAction(String action, ClanTask task, String which, String workingText)
 	{
 		ClanSyncPanel ui = panel;
-		if (ui == null || !tasksOn())
+		if (ui == null || !tasksOn() || taskQueue == null)
 		{
-			return;
-		}
-		if (!tasksBusy.compareAndSet(false, true))
-		{
-			ui.setTasksMessage("Please wait, still talking to the website...", false);
 			return;
 		}
 		Integer assignmentId = task == null ? null : task.getAssignmentId();
 		// The same request id is reused if this exact action is retried after a network error, so it never runs twice.
-		String key = action + ":" + assignmentId;
-		String requestId = pendingTaskRequests.computeIfAbsent(key, k -> newRequestId());
+		String requestId = taskRequestIds.id(action, assignmentId, ClanSyncPlugin::newRequestId);
 		String endpoint = config.endpoint();
 		String code = config.memberToken();
-		ui.setTasksBusy(true);
-		ui.setTasksMessage("Sending...", false);
-		executor.execute(() ->
+		ui.setTasksWorking(which, workingText);
+		taskQueue.submit(() ->
 		{
 			try
 			{
 				ClanTasksClient.Result result = tasksClient.act(endpoint, code, action, assignmentId, requestId);
-				if (result.status != 429 && result.status < 500)
-				{
-					pendingTaskRequests.remove(key);
-				}
+				taskRequestIds.finish(action, assignmentId, result.status);
 				handleTaskResult(ui, result, endpoint, code, action, task);
 				if (nextTaskPoll != 0)
 				{
@@ -1089,12 +1170,11 @@ public class ClanSyncPlugin extends Plugin
 			catch (IOException | RuntimeException e)
 			{
 				log.debug("Clan task action failed", e);
-				ui.setTasksMessage("Could not reach the website: " + e.getMessage() + ". Press the button again to retry.", true);
+				ui.setTasksResult(false, ClanTasksSection.NETWORK_FAILURE);
 			}
 			finally
 			{
-				tasksBusy.set(false);
-				ui.setTasksBusy(false);
+				ui.setTasksWorking(null, null);
 			}
 		});
 	}

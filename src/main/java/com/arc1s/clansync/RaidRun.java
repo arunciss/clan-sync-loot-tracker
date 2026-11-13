@@ -10,6 +10,7 @@ import lombok.Data;
 public class RaidRun
 {
 	public static final String TEAM_PARTY = "party";
+	public static final String TEAM_SCENE = "scene";
 
 	private String uid;
 	private String player;
@@ -19,8 +20,9 @@ public class RaidRun
 	private Integer killCount;
 	private Integer teamSize;
 	private List<String> team = new ArrayList<>();
-	// "party": names from the raid's own party slots (Theatre of Blood, Tombs of Amascut, Fractured Archive).
-	// Players merely seen around you are never sent.
+	// "party": names from the raid's own party list (Theatre of Blood, Tombs of Amascut, Fractured Archive, and the
+	// Chambers of Xeric raids side panel). "scene": Chambers of Xeric only, the players inside the raid instance when
+	// the party list could not be read. Players seen anywhere else are never sent.
 	private String teamSource;
 	// Tombs of Amascut raid level (invocation level), when known.
 	private Integer raidLevel;

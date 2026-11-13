@@ -23,8 +23,14 @@ import okhttp3.ResponseBody;
 class ClanTasksClient
 {
 	static final String ACTION_DONE = "done";
-	/** Skip the task for one re-roll, like a normal skip. */
+	/** Skip the task for one re-roll, exactly like the Discord skip. */
 	static final String ACTION_REROLL = "reroll";
+	/** Free skip for an item or drop the member already has. Same body as {@link #ACTION_GREENLOG}. */
+	static final String ACTION_HAVEITEM = "skip-haveitem";
+	/** Free skip when the member has the boss collection log. */
+	static final String ACTION_GREENLOG = "skip-greenlog";
+	/** Free skip when the member cannot do the task's quest. */
+	static final String ACTION_NOACCESS = "skip-noaccess";
 	static final String ACTION_TAKE = "take";
 	/** Saves the task preferences (wilderness, slayer boss tasks); they apply from the next task. */
 	static final String ACTION_PREFS = "prefs";
@@ -65,6 +71,17 @@ class ClanTasksClient
 		boolean ok()
 		{
 			return status >= 200 && status < 300;
+		}
+
+		/** A repeat of the same request id. The website already did the action; show it as success. */
+		boolean replayed()
+		{
+			return "replayed".equals(reason);
+		}
+
+		boolean accepted()
+		{
+			return ok() || replayed();
 		}
 
 		/** The personal code itself was refused (wrong, revoked, member left the clan). */

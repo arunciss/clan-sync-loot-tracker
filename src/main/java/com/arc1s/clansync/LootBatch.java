@@ -16,6 +16,11 @@ public class LootBatch
 	private List<KillTime> killTimes = new ArrayList<>();
 	// Optional (added after schema 2): older sites ignore it, older queue files load it as empty.
 	private List<RaidRun> raidRuns = new ArrayList<>();
+	// Optional (added in 2.5.0): level-ups to 92/99 and XP milestones. Sites that do not know it ignore it and the
+	// plugin keeps these queued until the site confirms it stores them.
+	private List<SkillEvent> skillEvents = new ArrayList<>();
+	// Optional (added in 2.5.3): every "Your X kill count is: N" message. Kept until the site answers killCounts=true.
+	private List<KillCountReport> killCounts = new ArrayList<>();
 	private Map<Integer, String> itemNames = new TreeMap<>();
 	private Map<Integer, Boolean> itemTradeable = new TreeMap<>();
 }

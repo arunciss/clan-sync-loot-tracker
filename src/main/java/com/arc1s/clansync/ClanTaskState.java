@@ -1,6 +1,7 @@
 package com.arc1s.clansync;
 
 import com.google.gson.annotations.SerializedName;
+import java.util.List;
 import lombok.Data;
 
 /** The member's clan task status from GET {api}/pvm/current. */
@@ -25,6 +26,12 @@ class ClanTaskState
 	private Boolean wildernessEnabled;
 	@SerializedName("slayer_tasks_enabled")
 	private Boolean slayerTasksEnabled;
+	/**
+	 * Skip menu from the website. Null on an older website, which falls back to local rules.
+	 * An empty list is present and means the website offered no skip rows.
+	 */
+	@SerializedName("skip_options")
+	private List<SkipOption> skipOptions;
 
 	/** A copy with another task (used to show local progress without changing the website's answer). */
 	ClanTaskState withTask(ClanTask shownTask)
@@ -41,6 +48,7 @@ class ClanTaskState
 		copy.message = message;
 		copy.wildernessEnabled = wildernessEnabled;
 		copy.slayerTasksEnabled = slayerTasksEnabled;
+		copy.skipOptions = skipOptions;
 		return copy;
 	}
 }

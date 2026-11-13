@@ -4,6 +4,7 @@ import com.google.gson.Gson;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import net.runelite.api.gameval.VarClientID;
 import net.runelite.api.gameval.VarPlayerID;
@@ -25,6 +26,24 @@ public class RaidRunTrackerTest
 		final Map<Integer, Integer> varbits = new HashMap<>();
 		final Map<Integer, Integer> varps = new HashMap<>();
 		final Map<Integer, String> varcs = new HashMap<>();
+		List<String> coxParty = Collections.emptyList();
+		List<String> scene = Collections.emptyList();
+		String local;
+
+		public List<String> coxPartyNames()
+		{
+			return coxParty;
+		}
+
+		public List<String> raidPlayerNames()
+		{
+			return scene;
+		}
+
+		public String localPlayerName()
+		{
+			return local;
+		}
 
 		public int varbit(int id)
 		{
@@ -273,5 +292,175 @@ public class RaidRunTrackerTest
 		assertEquals("Theatre of Blood", batch.getRaidRuns().get(0).getRaid());
 		reloaded.remove(Collections.singleton(run.getUid()));
 		assertEquals(0, reloaded.size());
+	}
+
+	// Exact chat lines (FRIENDSCHATNOTIFICATION / SPAM) from a real Chambers of Xeric Challenge Mode run with the
+	// CoX Timers plugin, 2026-11-03 19:46-20:20, client.log; seconds since "The raid has begun!".
+	private static final Object[][] COX_CM_RAID_730 = {
+		{0, "<col=ef20ff>The raid has begun!</col>"},
+		{83, "Combat room `Tekton` complete! Duration: <col=ff0000>1:22.8</col> Total: <col=ff0000>1:22.8</col>"},
+		{144, "Puzzle `Crabs` complete! Duration: <col=ff0000>1:01.8</col> Total: <col=ff0000>2:24.6</col>"},
+		{332, "Puzzle `Ice demon` complete! Duration: <col=ff0000>3:07.2</col> Total: <col=ff0000>5:31.8</col>"},
+		{429, "Combat room `Shamans` complete! Duration: <col=ff0000>1:37.2</col> Total: <col=ff0000>7:09.0</col>"},
+		{454, "@mes_hl_mag@Upper level complete! Duration: </col><col=ff0000>7:34.20</col>"},
+		{740, "Combat room `Vanguards` complete! Duration: <col=ff0000>4:46.2</col> Total: <col=ff0000>12:20.4</col>"},
+		{843, "Puzzle `Thieving` complete! Duration: <col=ff0000>1:43.2</col> Total: <col=ff0000>14:03.6</col>"},
+		{920, "Combat room `Vespula` complete! Duration: <col=ff0000>1:16.8</col> Total: <col=ff0000>15:20.4</col>"},
+		{1040, "Puzzle `Tightrope` complete! Duration: <col=ff0000>2:00.0</col> Total: <col=ff0000>17:20.4</col>"},
+		{1055, "@mes_hl_mag@Middle level complete! Duration: </col><col=ff0000>17:35.40</col>"},
+		{1194, "Combat room `Guardians` complete! Duration: <col=ff0000>2:18.6</col> Total: <col=ff0000>19:54.0</col>"},
+		{1270, "Combat room `Vasa` complete! Duration: <col=ff0000>1:16.2</col> Total: <col=ff0000>21:10.2</col>"},
+		{1376, "Combat room `Mystics` complete! Duration: <col=ff0000>1:46.2</col> Total: <col=ff0000>22:56.4</col>"},
+		{1532, "Combat room `Muttadiles` complete! Duration: <col=ff0000>2:36.0</col> Total: <col=ff0000>25:32.4</col>"},
+		{1589, "@mes_hl_mag@Lower level complete! Duration: </col><col=ff0000>26:28.80</col>"},
+		{1738, "Olm phase 1 duration: <col=ff0000>1:49.2</col> Total: <col=ff0000>28:58.2</col>"},
+		{1853, "Olm phase 2 duration: <col=ff0000>1:31.8</col> Total: <col=ff0000>30:53.4</col>"},
+		{2010, "Olm phase 3 duration: <col=ff0000>2:13.2</col> Total: <col=ff0000>33:29.4</col>"},
+		{2057, "<col=ef20ff>Congratulations - your raid is complete!</col><br>Team size: <col=ff0000>2 players</col> Duration:</col> <col=ff0000>34:16.80</col> Personal best: </col><col=ff0000>30:32.40</col>"},
+		{2057, "<colNORMAL>Total points: <colHIGHLIGHT>101,214<colNORMAL>, Personal points: <colHIGHLIGHT>50,424<colNORMAL> (<colHIGHLIGHT>49.82<colNORMAL>%)"},
+	};
+
+	// The same for the next run, 2026-11-03 20:28-21:00 (KC 731).
+	private static final Object[][] COX_CM_RAID_731 = {
+		{0, "<col=ef20ff>The raid has begun!</col>"},
+		{108, "Combat room `Tekton` complete! Duration: <col=ff0000>1:47.4</col> Total: <col=ff0000>1:47.4</col>"},
+		{170, "Puzzle `Crabs` complete! Duration: <col=ff0000>1:01.8</col> Total: <col=ff0000>2:49.2</col>"},
+		{347, "Puzzle `Ice demon` complete! Duration: <col=ff0000>2:57.6</col> Total: <col=ff0000>5:46.8</col>"},
+		{431, "Combat room `Shamans` complete! Duration: <col=ff0000>1:24.0</col> Total: <col=ff0000>7:10.8</col>"},
+		{461, "@mes_hl_mag@Upper level complete! Duration: </col><col=ff0000>7:40.20</col>"},
+		{710, "Combat room `Vanguards` complete! Duration: <col=ff0000>4:09.0</col> Total: <col=ff0000>11:49.2</col>"},
+		{802, "Puzzle `Thieving` complete! Duration: <col=ff0000>1:31.8</col> Total: <col=ff0000>13:21.0</col>"},
+		{871, "Combat room `Vespula` complete! Duration: <col=ff0000>1:09.6</col> Total: <col=ff0000>14:30.6</col>"},
+		{991, "Puzzle `Tightrope` complete! Duration: <col=ff0000>2:00.0</col> Total: <col=ff0000>16:30.6</col>"},
+		{1006, "@mes_hl_mag@Middle level complete! Duration: </col><col=ff0000>16:45.60</col>"},
+		{1138, "Combat room `Guardians` complete! Duration: <col=ff0000>2:11.4</col> Total: <col=ff0000>18:57.0</col>"},
+		{1240, "Combat room `Vasa` complete! Duration: <col=ff0000>1:42.6</col> Total: <col=ff0000>20:39.6</col>"},
+		{1349, "Combat room `Mystics` complete! Duration: <col=ff0000>1:48.6</col> Total: <col=ff0000>22:28.2</col>"},
+		{1447, "Combat room `Muttadiles` complete! Duration: <col=ff0000>1:38.4</col> Total: <col=ff0000>24:06.6</col>"},
+		{1487, "@mes_hl_mag@Lower level complete! Duration: </col><col=ff0000>24:46.20</col>"},
+		{1628, "Olm phase 1 duration: <col=ff0000>1:48.0</col> Total: <col=ff0000>27:07.2</col>"},
+		{1754, "Olm phase 2 duration: <col=ff0000>1:42.6</col> Total: <col=ff0000>29:13.2</col>"},
+		{1906, "Olm phase 3 duration: <col=ff0000>2:09.0</col> Total: <col=ff0000>31:45.6</col>"},
+		{1962, "<col=ef20ff>Congratulations - your raid is complete!</col><br>Team size: <col=ff0000>2 players</col> Duration:</col> <col=ff0000>32:41.40</col> Personal best: </col><col=ff0000>30:32.40</col>"},
+		{1962, "<colNORMAL>Total points: <colHIGHLIGHT>107,450<colNORMAL>, Personal points: <colHIGHLIGHT>55,091<colNORMAL> (<colHIGHLIGHT>51.27<colNORMAL>%)"},
+	};
+
+	private RaidRun replay(Object[][] lines, int killCount)
+	{
+		int start = 1000;
+		int tick = start;
+		for (Object[] line : lines)
+		{
+			tick = start + (int) Math.round((Integer) line[0] / 0.6);
+			tracker.onMessage((String) line[1], tick, context);
+		}
+		return finish("Your completed Chambers of Xeric Challenge Mode count is: <col=ff0000>" + killCount + "</col>.", tick);
+	}
+
+	private static void assertRooms(RaidRun run, Object[][] expected)
+	{
+		assertEquals(expected.length, run.getRooms().size());
+		for (int i = 0; i < expected.length; i++)
+		{
+			RaidRoom room = run.getRooms().get(i);
+			assertEquals("position " + i, expected[i][0], room.getName());
+			assertEquals("position " + i, expected[i][1], room.getKind());
+			assertEquals("position " + i, ((Number) expected[i][2]).longValue(), room.getTimeMs());
+			assertNull(room.getGamePersonalBestMs());
+			assertFalse(room.isNewPersonalBest());
+		}
+	}
+
+	@Test
+	public void cleanStripsGameFormatPrefix()
+	{
+		assertEquals("Upper level complete! Duration: 7:34.20",
+			RaidRunTracker.clean("@mes_hl_mag@Upper level complete! Duration: </col><col=ff0000>7:34.20</col>"));
+		assertEquals("The Great Olm fires a sphere of magical power your way. Your prayers have been sapped.",
+			RaidRunTracker.clean("@mes_hl_blu@The Great Olm fires a sphere of magical power your way.</col> Your prayers have been sapped."));
+		// Only a leading code is a format code; "@" elsewhere stays.
+		assertEquals("a @b@ c", RaidRunTracker.clean("a @b@ c"));
+	}
+
+	@Test
+	public void realChambersChallengeModeRunKeepsFloorsAndOlm()
+	{
+		context.varbits.put(VarbitID.RAIDS_CLIENT_PARTYSIZE, 2);
+		context.varbits.put(VarbitID.RAIDS_CLIENT_PARTYSCORE, 101214);
+		context.varps.put(VarPlayerID.RAIDS_PLAYERSCORE, 50424);
+		RaidRun run = replay(COX_CM_RAID_730, 730);
+		assertEquals("Chambers of Xeric Challenge Mode", run.getRaid());
+		assertEquals(Integer.valueOf(730), run.getKillCount());
+		assertEquals(Integer.valueOf(2), run.getTeamSize());
+		assertEquals(Integer.valueOf(101214), run.getTotalPoints());
+		assertEquals(Integer.valueOf(50424), run.getPersonalPoints());
+		assertEquals(Long.valueOf(2056800L), run.getTotalTimeMs());
+		assertEquals(Long.valueOf(1832400L), run.getTotalPersonalBestMs());
+		assertRooms(run, new Object[][]{
+			{"Tekton", RaidRoom.KIND_ROOM, 82800}, {"Crabs", RaidRoom.KIND_ROOM, 61800},
+			{"Ice demon", RaidRoom.KIND_ROOM, 187200}, {"Shamans", RaidRoom.KIND_ROOM, 97200},
+			{"Upper level", RaidRoom.KIND_FLOOR, 454200},
+			{"Vanguards", RaidRoom.KIND_ROOM, 286200}, {"Thieving", RaidRoom.KIND_ROOM, 103200},
+			{"Vespula", RaidRoom.KIND_ROOM, 76800}, {"Tightrope", RaidRoom.KIND_ROOM, 120000},
+			{"Middle level", RaidRoom.KIND_FLOOR, 601200},
+			{"Guardians", RaidRoom.KIND_ROOM, 138600}, {"Vasa", RaidRoom.KIND_ROOM, 76200},
+			{"Mystics", RaidRoom.KIND_ROOM, 106200}, {"Muttadiles", RaidRoom.KIND_ROOM, 156000},
+			{"Lower level", RaidRoom.KIND_FLOOR, 533400},
+			{"Olm", RaidRoom.KIND_REST, 468000},
+		});
+	}
+
+	@Test
+	public void realChambersChallengeModeSecondRun()
+	{
+		RaidRun run = replay(COX_CM_RAID_731, 731);
+		assertEquals(Long.valueOf(1961400L), run.getTotalTimeMs());
+		assertEquals(16, run.getRooms().size());
+		assertEquals("Upper level", run.getRooms().get(4).getName());
+		assertEquals(460200L, run.getRooms().get(4).getTimeMs());
+		assertEquals("Middle level", run.getRooms().get(9).getName());
+		assertEquals(545400L, run.getRooms().get(9).getTimeMs());
+		assertEquals("Lower level", run.getRooms().get(14).getName());
+		assertEquals(480600L, run.getRooms().get(14).getTimeMs());
+		assertEquals("Olm", run.getRooms().get(15).getName());
+		assertEquals(RaidRoom.KIND_REST, run.getRooms().get(15).getKind());
+		assertEquals(475200L, run.getRooms().get(15).getTimeMs());
+	}
+
+	@Test
+	public void chambersPartyListNames()
+	{
+		context.varbits.put(VarbitID.RAIDS_CLIENT_PARTYSIZE, 2);
+		context.local = "Arc1s";
+		context.coxParty = Arrays.asList("<col=ffffff>Arc1s</col>", "Friend\u00A0Two", "<col=ffffff>Arc1s</col>");
+		context.scene = Arrays.asList("Arc1s", "Friend Two");
+		RaidRun run = replay(COX_CM_RAID_730, 730);
+		assertEquals(Arrays.asList("Arc1s", "Friend Two"), run.getTeam());
+		assertEquals(RaidRun.TEAM_PARTY, run.getTeamSource());
+	}
+
+	@Test
+	public void chambersFallsBackToPlayersInTheRaid()
+	{
+		context.varbits.put(VarbitID.RAIDS_CLIENT_PARTYSIZE, 2);
+		context.local = "Arc1s";
+		// A list without you, or with things that are not names, is not trusted.
+		context.coxParty = Arrays.asList("Someone", "126");
+		context.scene = Arrays.asList("Arc1s", "Mate");
+		RaidRun run = replay(COX_CM_RAID_730, 730);
+		assertEquals(Arrays.asList("Arc1s", "Mate"), run.getTeam());
+		assertEquals(RaidRun.TEAM_SCENE, run.getTeamSource());
+		assertEquals(Integer.valueOf(2), run.getTeamSize());
+	}
+
+	@Test
+	public void chambersSceneNamesDroppedWhenMoreThanTheParty()
+	{
+		context.varbits.put(VarbitID.RAIDS_CLIENT_PARTYSIZE, 2);
+		context.scene = Arrays.asList("Arc1s", "Mate", "Stranger");
+		RaidRun run = replay(COX_CM_RAID_730, 730);
+		assertTrue(run.getTeam() == null || run.getTeam().isEmpty());
+		assertNull(run.getTeamSource());
+		assertEquals(16, run.getRooms().size());
 	}
 }
