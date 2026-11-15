@@ -7,7 +7,9 @@ import java.util.Map;
 /**
  * Optimistic task progress between website checks: the task boss's kill count chat message (kill count tasks) or
  * a required drop (drop tasks) moves the shown progress at once. Loot never counts as a kill. The website stays the judge: its next answer replaces the local
- * count as soon as it has caught up, and an unconfirmed local count is dropped after a few minutes.
+ * count as soon as it has caught up. A count the plugin itself reported expires after a few minutes. A count the
+ * site still shows as Wise Old Man data does not: it stays until the site catches up, the task changes, or the
+ * track base changes (then it is recomputed from the last kill count seen this session).
  * Called from the client thread (game events) and the executor (website answers), so every method is synchronized.
  */
 class TaskProgressTracker
@@ -18,17 +20,35 @@ class TaskProgressTracker
 	private int local = -1;
 	private long localAt;
 	private boolean uploadPending;
+	/** Last game kill count seen for this task's boss. Forgotten when the assignment changes. */
+	private int lastKc = -1;
 
 	/** The website's latest task (null = none). Keeps the local count only while it is ahead and still fresh. */
 	synchronized void setServerTask(ClanTask newTask, long now)
 	{
-		if (newTask == null || task == null || newTask.getAssignmentId() != task.getAssignmentId())
+		Integer previousBase = baseOf(task);
+		boolean sameAssignment = newTask != null && task != null && newTask.getAssignmentId() == task.getAssignmentId();
+		if (!sameAssignment)
 		{
 			local = -1;
+			lastKc = -1;
 			uploadPending = false;
 		}
 		task = newTask;
-		if (local >= 0 && (now - localAt > LOCAL_TTL_MILLIS || serverCurrent() >= local))
+		if (sameAssignment)
+		{
+			Integer base = baseOf(task);
+			if (lastKc >= 0 && base != null && (previousBase == null || !base.equals(previousBase)))
+			{
+				int recomputed = lastKc - base;
+				if (recomputed >= 0)
+				{
+					local = recomputed;
+					localAt = now;
+				}
+			}
+		}
+		if (local >= 0 && ((pluginSource() && now - localAt > LOCAL_TTL_MILLIS) || serverCurrent() >= local))
 		{
 			local = -1;
 		}
@@ -42,8 +62,22 @@ class TaskProgressTracker
 		{
 			return false;
 		}
+		lastKc = killCount;
 		int value = track.getBase() != null ? killCount - track.getBase() : current(now) + 1;
 		return raise(value, now);
+	}
+
+	/**
+	 * A kill count was queued for this task's boss. Ask for the early upload even when the shown count did not move,
+	 * so the site can replace a Wise Old Man number.
+	 */
+	synchronized void markTaskBossUpload(String name)
+	{
+		ClanTask.Track track = track();
+		if (track != null && "kc".equals(track.getMode()) && matchesAny(alnum(name), track.getKcNames(), true))
+		{
+			uploadPending = true;
+		}
 	}
 
 	/**
@@ -117,7 +151,27 @@ class TaskProgressTracker
 
 	private int localCount(long now)
 	{
-		return local >= 0 && now - localAt <= LOCAL_TTL_MILLIS ? local : -1;
+		if (local < 0)
+		{
+			return -1;
+		}
+		// Wise Old Man (or a missing source) has not caught up: keep the count instead of falling back to 0.
+		if (!pluginSource() || now - localAt <= LOCAL_TTL_MILLIS)
+		{
+			return local;
+		}
+		return -1;
+	}
+
+	/** True only when the website says this progress came from the plugin, so the short expiry applies. */
+	private boolean pluginSource()
+	{
+		return task != null && task.getProgress() != null && "plugin".equals(task.getProgress().getSource());
+	}
+
+	private static Integer baseOf(ClanTask task)
+	{
+		return task == null || task.getTrack() == null ? null : task.getTrack().getBase();
 	}
 
 	private int serverCurrent()

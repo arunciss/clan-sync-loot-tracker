@@ -258,27 +258,6 @@ public class ClanTasksTest
 		assertFalse(ClanSyncPlugin.noRerollsText(2).contains("Green log"));
 		assertTrue(ClanSyncPlugin.noRerollsText(2).contains("after 2 more completed tasks"));
 		assertTrue(ClanSyncPlugin.noRerollsText(1).contains("after 1 more completed task."));
-		assertEquals("Skip / Re-roll (3 left)", ClanTasksSection.rerollButtonText(3));
-		assertEquals("Skip / Re-roll (none left)", ClanTasksSection.rerollButtonText(0));
-	}
-
-	@Test
-	public void rerollButtonIsOffWithoutRerolls() throws Exception
-	{
-		ClanTasksClient.Result result = client(200, STATE).current("https://example.com/api/plugin", "code");
-		ClanTasksSection[] section = new ClanTasksSection[1];
-		javax.swing.SwingUtilities.invokeAndWait(() ->
-		{
-			section[0] = new ClanTasksSection(null);
-			section[0].showState(result.state);
-		});
-		assertTrue(section[0].canReroll());
-		assertEquals("Skip / Re-roll (5 left)", section[0].rerollLabel());
-		result.state.setRerolls(0);
-		javax.swing.SwingUtilities.invokeAndWait(() -> section[0].showState(result.state));
-		assertFalse(section[0].canReroll());
-		javax.swing.SwingUtilities.invokeAndWait(() -> section[0].showState(null));
-		assertFalse(section[0].canReroll());
 	}
 
 	@Test
@@ -298,5 +277,88 @@ public class ClanTasksTest
 		assertTrue(ClanSyncPlugin.isRosterRank(125));
 		assertFalse(ClanSyncPlugin.isRosterRank(100));
 		assertFalse(ClanSyncPlugin.isRosterRank(127));
+	}
+
+	@Test
+	public void skipPathsSitUnderApiPluginPvm()
+	{
+		assertEquals("https://example.com/api/plugin/pvm/skip-haveitem",
+			ClanTasksClient.url("https://example.com/api/plugin", SkipOption.defaultAction(SkipOption.HAVEITEM)).toString());
+		assertEquals("https://example.com/api/plugin/pvm/skip-noaccess",
+			ClanTasksClient.url("https://example.com/api/plugin/loot", "skip-noaccess").toString());
+		assertEquals("https://example.com/api/plugin/pvm/skip-greenlog",
+			ClanTasksClient.url("https://example.com/api/plugin", "skip-greenlog").toString());
+		assertEquals("https://example.com/api/plugin/pvm/reroll",
+			ClanTasksClient.url("https://example.com/api/plugin", "reroll").toString());
+	}
+
+	@Test
+	public void haveitemPostsTheActionSuffix() throws IOException
+	{
+		String body = "{\"status\":200,\"message\":\"Task skipped for free (you have this item). New task: Kill Scurrius 25 times.\","
+			+ "\"data\":{\"reason\":\"skip-haveitem\",\"state\":{\"feature\":\"clan_tasks\",\"available\":true,\"joined\":true,\"rerolls\":2,\"task\":null}}}";
+		ClanTasksClient.Result result = client(200, body)
+			.act("https://example.com/api/plugin", "code", "skip-haveitem", 418, "0123456789abcdef0123456789abcdef");
+		assertTrue(result.accepted());
+		assertFalse(result.replayed());
+		assertEquals("https://example.com/api/plugin/pvm/skip-haveitem", requests.get(0).url().toString());
+		Buffer buffer = new Buffer();
+		requests.get(0).body().writeTo(buffer);
+		assertEquals("{\"assignmentId\":418,\"requestId\":\"0123456789abcdef0123456789abcdef\"}", buffer.readUtf8());
+		assertEquals("Task skipped for free (you have this item). New task: Kill Scurrius 25 times.", result.message);
+		assertEquals("Task skipped for free (you have this item). New task: Kill Scurrius 25 times.",
+			ClanTasksSection.successLine(result.message));
+	}
+
+	@Test
+	public void refusal409ShowsTheServerMessage() throws IOException
+	{
+		String message = "Only for tasks that need a quest. Nothing changed, no re-roll used.";
+		String body = "{\"status\":409,\"message\":\"" + message + "\",\"data\":{\"reason\":\"noaccess_no_quest\",\"state\":"
+			+ "{\"feature\":\"clan_tasks\",\"available\":true,\"joined\":true,\"rerolls\":2,\"task\":null}}}";
+		ClanTasksClient.Result result = client(409, body)
+			.act("https://example.com/api/plugin", "code", "skip-noaccess", 420, ClanSyncPlugin.newRequestId());
+		assertFalse(result.ok());
+		assertFalse(result.accepted());
+		assertFalse(result.codeRefused());
+		assertEquals("noaccess_no_quest", result.reason);
+		assertEquals(message, result.message);
+		assertEquals(message, ClanTasksSection.failureLine(result.message));
+		assertNotNull(result.state);
+	}
+
+	@Test
+	public void replayedIsSuccess() throws IOException
+	{
+		String body = "{\"status\":200,\"message\":\"Already done.\",\"data\":{\"reason\":\"replayed\",\"state\":"
+			+ "{\"feature\":\"clan_tasks\",\"available\":true,\"joined\":true,\"rerolls\":2,\"task\":null}}}";
+		ClanTasksClient.Result result = client(200, body)
+			.act("https://example.com/api/plugin", "code", "skip-greenlog", 7, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+		assertTrue(result.ok());
+		assertTrue(result.replayed());
+		assertTrue(result.accepted());
+		assertEquals("Already done.", result.message);
+		assertEquals("Already done.", ClanTasksSection.successLine(result.message));
+	}
+
+	@Test
+	public void skipOptionsUseTheServersAction() throws IOException
+	{
+		String json = STATE.replace("\"message\":\"\",", "\"message\":\"\",\"skip_options\":["
+			+ "{\"id\":\"reroll\",\"label\":\"Re-roll\",\"action\":\"reroll\",\"available\":true,\"cost\":\"reroll\",\"hint\":\"New random task. 2 left, 1 after.\"},"
+			+ "{\"id\":\"haveitem\",\"label\":\"I have this item\",\"action\":\"skip-haveitem\",\"available\":false,\"cost\":\"free\",\"hint\":\"ignored\",\"reason\":\"Only for item tasks.\"},"
+			+ "{\"id\":\"greenlog\",\"label\":\"Green log\",\"action\":\"skip-greenlog\",\"available\":true,\"cost\":\"free\",\"hint\":\"You have the whole collection log.\"},"
+			+ "{\"id\":\"noaccess\",\"label\":\"No access\",\"action\":\"skip-noaccess\",\"available\":false,\"cost\":\"free\",\"reason\":\"Only for tasks that need a quest.\"}"
+			+ "],");
+		ClanTasksClient.Result result = client(200, json).current("https://example.com/api/plugin", "code");
+		List<SkipOption> options = SkipOptions.resolve(result.state);
+		assertEquals(4, options.size());
+		assertEquals("reroll", options.get(0).endpoint());
+		assertEquals("skip-haveitem", options.get(1).endpoint());
+		assertFalse(options.get(1).isAvailable());
+		assertEquals("Only for item tasks.", options.get(1).getReason());
+		assertEquals("skip-greenlog", options.get(2).endpoint());
+		assertEquals("skip-noaccess", options.get(3).endpoint());
+		assertEquals(32, ClanSyncPlugin.newRequestId().length());
 	}
 }

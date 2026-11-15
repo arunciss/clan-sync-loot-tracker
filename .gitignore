@@ -12,4 +12,6 @@ nb-configuration.xml
 nbproject/
 *.class
 *.tmp
+*.bak
+*.bak*
 .DS_Store

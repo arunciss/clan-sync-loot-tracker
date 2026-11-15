@@ -76,8 +76,8 @@ public interface ClanSyncConfig extends Config
 	@ConfigItem(
 		keyName = "uploadLoot",
 		name = "Upload drops and kill times",
-		description = "Send your own drops (items, quantities, prices), kill counts, kill and raid times, personal bests"
-			+ " and raid teammates' names to the website above.",
+		description = "Send your own drops (items, quantities, prices), kill counts, kill and raid times, personal bests,"
+			+ " raid teammates' names and your own level 92/99 and XP milestone (15m, 20m ... 200m) level-ups to the website above.",
 		warning = WARNING,
 		section = websiteSection,
 		position = 4
@@ -106,7 +106,7 @@ public interface ClanSyncConfig extends Config
 		keyName = "clanTasks",
 		name = "Show clan tasks",
 		description = "If your clan website offers clan tasks, show your current task in the side panel with Done,"
-			+ " Skip / Re-roll (uses one re-roll) and Take a new task buttons. Checks the website about every 90 seconds while you are logged in.",
+			+ " Skip (re-roll or a free skip) and Take a new task. Checks the website about every 90 seconds while you are logged in.",
 		warning = WARNING,
 		section = tasksSection,
 		position = 21
@@ -144,8 +144,8 @@ public interface ClanSyncConfig extends Config
 	@ConfigItem(
 		keyName = "wildernessTasks",
 		name = "Wilderness tasks",
-		description = "Allow clan tasks in the Wilderness. Saved on the clan website and used from your next task;"
-			+ " your current task is not changed.",
+		description = "Allow clan tasks in the Wilderness. Saved on the clan website (the same setting as the Discord"
+			+ " /pvm_wildy command) and used from your next task; your current task is not changed.",
 		section = tasksSection,
 		position = 24
 	)

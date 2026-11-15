@@ -242,9 +242,26 @@ class ClanSyncPanel extends PluginPanel
 		SwingUtilities.invokeLater(() -> tasksSection.setMessage(text, error));
 	}
 
-	void setTasksBusy(boolean busy)
+	/** Green tick on success, red cross and the retry line on failure. */
+	void setTasksResult(boolean success, String message)
 	{
-		SwingUtilities.invokeLater(() -> tasksSection.setBusy(busy));
+		SwingUtilities.invokeLater(() -> tasksSection.showResult(success, message));
+	}
+
+	/** {@code which} is done, skip, take or refresh. A null which clears the working state. */
+	void setTasksWorking(String which, String label)
+	{
+		SwingUtilities.invokeLater(() ->
+		{
+			if (which == null)
+			{
+				tasksSection.endWork();
+			}
+			else
+			{
+				tasksSection.beginWork(which, label);
+			}
+		});
 	}
 
 	void setBusy(boolean busy)

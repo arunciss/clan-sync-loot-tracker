@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -24,6 +25,9 @@ import net.runelite.api.gameval.VarbitID;
 //  - Tombs of Amascut and The Fractured Archive: "Challenge complete: X. Duration: T. Total: T[. Personal best: P]",
 //    "... challenge completion time: T" and "... total completion time: T".
 // Points exist only in Chambers of Xeric (party and personal score varbits, as RuneLite's raids plugin reads).
+// The game prefixes some of these messages with a format code such as "@mes_hl_mag@", which is removed first.
+// Chambers of Xeric party names come from the raid party list (raids side panel); when that list cannot be read,
+// the names of the players inside the raid instance (only the party can be there) are used, marked "scene".
 public class RaidRunTracker
 {
 	static final String COX = "cox";
@@ -37,6 +41,10 @@ public class RaidRunTracker
 	static final int STALE_TICKS = 3000;
 	static final int MAX_ROOMS = 40;
 	private static final Pattern NAME = Pattern.compile("^[A-Za-z0-9 _\\-]{1,12}$");
+	private static final Pattern LETTER = Pattern.compile("[A-Za-z]");
+	// Game format codes at the start of a message, e.g. "@mes_hl_mag@Upper level complete! ...".
+	private static final Pattern FORMAT_PREFIX = Pattern.compile("^(?:@[A-Za-z0-9_]{1,30}@\\s*)+");
+	static final int MAX_PARTY = 100;
 
 	private static final String T = DurationParser.TIME;
 	private static final Pattern COX_START = Pattern.compile("^The raid has begun!");
@@ -77,6 +85,8 @@ public class RaidRunTracker
 	private boolean totalPrecise;
 	private TeamSize messageTeamSize;
 	private List<String> partyNames = Collections.emptyList();
+	// Chambers of Xeric only: players seen inside the raid instance, used when the party list was not readable.
+	private final Set<String> sceneNames = new LinkedHashSet<>();
 	private Integer slotTeamSize;
 	private Integer raidLevel;
 	private Integer personalPoints;
@@ -89,6 +99,7 @@ public class RaidRunTracker
 		if (COX_START.matcher(text).find())
 		{
 			reset(COX, tick);
+			snapshot(context);
 			return;
 		}
 		if (TOA_ENTER.matcher(text).find())
@@ -269,6 +280,11 @@ public class RaidRunTracker
 			run.setTeam(new ArrayList<>(partyNames));
 			run.setTeamSource(RaidRun.TEAM_PARTY);
 		}
+		else if (COX.equals(family) && !sceneNames.isEmpty() && (slotTeamSize == null || sceneNames.size() <= slotTeamSize))
+		{
+			run.setTeam(new ArrayList<>(sceneNames));
+			run.setTeamSource(RaidRun.TEAM_SCENE);
+		}
 		TeamSize size = slotTeamSize != null ? TeamSize.exact(slotTeamSize) : messageTeamSize;
 		if (size == null && RaidRun.TEAM_PARTY.equals(run.getTeamSource()))
 		{
@@ -371,6 +387,7 @@ public class RaidRunTracker
 		challengePersonalBestMs = null;
 		messageTeamSize = null;
 		partyNames = Collections.emptyList();
+		sceneNames.clear();
 		slotTeamSize = null;
 		raidLevel = null;
 		personalPoints = null;
@@ -378,8 +395,8 @@ public class RaidRunTracker
 		pending = null;
 	}
 
-	// Reads the raid's own party slots and score varbits. Only names in the raid party are read; other players
-	// around you are never looked at.
+	// Reads the raid's own party slots and score varbits. Names come from the raid party only; in Chambers of Xeric
+	// also from the players inside the raid instance, where nobody but the party can be.
 	private void snapshot(RaidContext context)
 	{
 		if (context == null || family == null)
@@ -435,11 +452,83 @@ public class RaidRunTracker
 			{
 				personalPoints = own;
 			}
+			coxNames(context, slots);
 		}
 		if (slots != null)
 		{
 			slotTeamSize = slots;
 		}
+	}
+
+	// The raid party list is used only when it looks right: every entry a valid name, your own name among them
+	// (when known) and no more names than the party size. Otherwise the instance's players are collected instead.
+	private void coxNames(RaidContext context, Integer partySize)
+	{
+		String local = name(context.localPlayerName());
+		List<String> party = names(context.coxPartyNames());
+		if (party != null && !party.isEmpty() && (partySize == null || party.size() <= partySize)
+			&& (local == null || containsName(party, local)))
+		{
+			partyNames = party;
+		}
+		List<String> scene = names(context.raidPlayerNames());
+		if (scene != null)
+		{
+			for (String name : scene)
+			{
+				if (sceneNames.size() >= MAX_PARTY)
+				{
+					break;
+				}
+				if (!containsName(new ArrayList<>(sceneNames), name))
+				{
+					sceneNames.add(name);
+				}
+			}
+		}
+	}
+
+	// Valid, distinct names; null when any entry is not a player name (the list is then not trusted at all).
+	private static List<String> names(List<String> raw)
+	{
+		if (raw == null)
+		{
+			return null;
+		}
+		List<String> result = new ArrayList<>();
+		for (String entry : raw)
+		{
+			if (entry == null || entry.trim().isEmpty())
+			{
+				continue;
+			}
+			String name = name(entry);
+			if (name == null || !LETTER.matcher(name).find())
+			{
+				return null;
+			}
+			if (!containsName(result, name))
+			{
+				result.add(name);
+			}
+			if (result.size() > MAX_PARTY)
+			{
+				return null;
+			}
+		}
+		return result;
+	}
+
+	private static boolean containsName(List<String> names, String name)
+	{
+		for (String other : names)
+		{
+			if (other.equalsIgnoreCase(name))
+			{
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private static Integer count(RaidContext context, int[] slots)
@@ -490,6 +579,7 @@ public class RaidRunTracker
 
 	static String clean(String message)
 	{
-		return message.replaceAll("(?i)<br\\s*/?>", " ").replaceAll("<[^>]*>", "").replace('\u00A0', ' ').replaceAll("\\s+", " ").trim();
+		String text = message.replaceAll("(?i)<br\\s*/?>", " ").replaceAll("<[^>]*>", "").replace('\u00A0', ' ').replaceAll("\\s+", " ").trim();
+		return FORMAT_PREFIX.matcher(text).replaceFirst("").trim();
 	}
 }
